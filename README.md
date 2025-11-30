@@ -28,6 +28,20 @@ Download this repo and run `make` in the main directory to build `bvhview.exe`.
 
 To build a release version with optimizations enabled and no console window run `make BUILD_MODE=RELEASE` in the main directory instead.
 
+## macOS
+
+Install the Xcode command line tools (or an alternative toolchain such as Homebrew’s GCC/Clang) so `make` and `clang` are available.
+
+Download [raylib](https://github.com/raysan5/raylib) into `~/raylib/raylib`.
+
+Download [raygui](https://github.com/raysan5/raygui) into `~/raylib/raygui`.
+
+Build raylib by going to `~/raylib/raylib/src` and running `make PLATFORM=PLATFORM_DESKTOP`.
+
+Download this repo and run `make PLATFORM_OS=Darwin` in the main directory to build `bvhview`.
+
+To build a release version with optimizations enabled run `make BUILD_MODE=RELEASE PLATFORM_OS=Darwin` in the main directory instead.
+
 ## Linux
 
 Download [raylib](https://github.com/raysan5/raylib) into `~/raylib/raylib`.

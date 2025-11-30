@@ -2586,21 +2586,39 @@ static inline void CapsuleDataUpdateForCharacters(CapsuleData* capsuleData, Char
 #define AO_CAPSULES_MAX 32
 #define SHADOW_CAPSULES_MAX 64
 
+
 #define GLSL_DEFINE_VALUE(X) #X
 #define GLSL_DEFINE(X) "#define " #X " " GLSL_DEFINE_VALUE(X) " \n"
-#define GLSL(X) \
-  "#version 300 es\n" \
+
+#if defined(PLATFORM_WEB)
+#define GLSL_VERSION "#version 300 es\n"
+#define GLSL_PRECISION "precision highp float;\nprecision mediump int;\n"
+#else
+#define GLSL_VERSION "#version 330 core\n"
+#define GLSL_PRECISION ""
+#endif
+
+#define GLSL_STRINGIFY_INNER(X) #X
+#define GLSL_STRINGIFY(X) GLSL_STRINGIFY_INNER(X)
+
+#define GLSL_HEADER \
+  GLSL_VERSION \
   GLSL_DEFINE(AO_RATIO_MAX) \
   GLSL_DEFINE(AO_CAPSULES_MAX) \
   GLSL_DEFINE(SHADOW_CAPSULES_MAX) \
-  GLSL_DEFINE(PI) \
-  #X
+  GLSL_DEFINE(PI)
+
+#define GLSL_SHADER(X) \
+  GLSL_HEADER \
+  GLSL_STRINGIFY(X)
+
+#define GLSL_SHADER_WITH_PRECISION(X) \
+  GLSL_HEADER \
+  GLSL_PRECISION \
+  GLSL_STRINGIFY(X)
 
 // Vertex Shader
-static const char* shaderVS = GLSL(
-
-precision highp float;
-precision mediump int;
+static const char* shaderVS = GLSL_SHADER(
 
 in vec3 vertexPosition;
 in vec2 vertexTexCoord;
@@ -2659,10 +2677,7 @@ void main()
 );
 
 // Fragment Shader
-static const char* shaderFS = GLSL(
-
-precision highp float;
-precision mediump int;
+static const char* shaderFS = GLSL_SHADER_WITH_PRECISION(
 
 in vec3 fragPosition;
 in vec2 fragTexCoord;
