@@ -8,3 +8,5 @@ examples/*
 *.log
 *__pycache__*
 *.exe
+
+build/

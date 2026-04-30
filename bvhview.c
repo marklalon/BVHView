@@ -3968,10 +3968,10 @@ static void ApplicationUpdate(void* voidApplicationState)
         OrbitCameraUpdate(
             &app->camera,
             cameraTarget,
-            (IsKeyDown(KEY_LEFT_CONTROL) && IsMouseButtonDown(0)) ? GetMouseDelta().x : 0.0f,
-            (IsKeyDown(KEY_LEFT_CONTROL) && IsMouseButtonDown(0)) ? GetMouseDelta().y : 0.0f,
-            (IsKeyDown(KEY_LEFT_CONTROL) && IsMouseButtonDown(1)) ? GetMouseDelta().x : 0.0f,
-            (IsKeyDown(KEY_LEFT_CONTROL) && IsMouseButtonDown(1)) ? GetMouseDelta().y : 0.0f,
+            IsMouseButtonDown(0) ? 0.5*GetMouseDelta().x : 0.0f,
+            IsMouseButtonDown(0) ? 0.5*GetMouseDelta().y : 0.0f,
+            IsMouseButtonDown(1) ? -0.5*GetMouseDelta().x : 0.0f,
+            IsMouseButtonDown(1) ? -0.5*GetMouseDelta().y : 0.0f,
             GetMouseWheelMove(),
             GetFrameTime());
     }
