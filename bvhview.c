@@ -595,7 +595,7 @@ static inline void OrbitCameraUpdate(
 {
     camera->azimuth = camera->azimuth + 1.0f * dt * -azimuthDelta;
     camera->altitude = Clamp(camera->altitude + 1.0f * dt * altitudeDelta, 0.0, 0.4f * PI);
-    camera->distance = Clamp(camera->distance +  20.0f * dt * -mouseWheel, 0.1f, 100.0f);
+    camera->distance = Clamp(camera->distance +  40.0f * dt * -mouseWheel, 0.1f, 100.0f);
     
     Quaternion rotationAzimuth = QuaternionFromAxisAngle((Vector3){0, 1, 0}, camera->azimuth);
     Vector3 position = Vector3RotateByQuaternion((Vector3){0, 0, camera->distance}, rotationAzimuth);
@@ -3965,13 +3965,15 @@ static void ApplicationUpdate(void* voidApplicationState)
 
     if (!app->fileDialogState.windowActive)
     {
+        bool shiftHeld = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+        bool middleDown = IsMouseButtonDown(2);
         OrbitCameraUpdate(
             &app->camera,
             cameraTarget,
-            IsMouseButtonDown(0) ? 0.5*GetMouseDelta().x : 0.0f,
-            IsMouseButtonDown(0) ? 0.5*GetMouseDelta().y : 0.0f,
-            IsMouseButtonDown(1) ? -0.5*GetMouseDelta().x : 0.0f,
-            IsMouseButtonDown(1) ? -0.5*GetMouseDelta().y : 0.0f,
+            (middleDown && !shiftHeld) ? GetMouseDelta().x : 0.0f,
+            (middleDown && !shiftHeld) ? GetMouseDelta().y : 0.0f,
+            (middleDown && shiftHeld) ? -GetMouseDelta().x : 0.0f,
+            (middleDown && shiftHeld) ? -GetMouseDelta().y : 0.0f,
             GetMouseWheelMove(),
             GetFrameTime());
     }
@@ -4394,7 +4396,7 @@ int main(int argc, char** argv)
     SetConfigFlags(FLAG_VSYNC_HINT);
     SetConfigFlags(FLAG_MSAA_4X_HINT);
     InitWindow(app.screenWidth, app.screenHeight, "BVHView");
-    SetTargetFPS(60);
+    SetTargetFPS(0);  // 0 = unlimited, VSYNC will sync with monitor refresh rate
 
     // Camera
 
