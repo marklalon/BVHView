@@ -10,3 +10,4 @@ examples/*
 *.exe
 
 build/
+.claude/

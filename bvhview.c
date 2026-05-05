@@ -33,6 +33,7 @@
 #include "rcamera.h"
 #include "raymath.h"
 #include "rlgl.h"
+#include "build/raylib/raylib/src/external/cgltf.h"
 #define RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT 24
 #define GUI_WINDOW_FILE_DIALOG_IMPLEMENTATION
 #include "../examples/custom_file_dialog/gui_window_file_dialog.h"
@@ -1394,6 +1395,372 @@ static void TransformDataForwardKinematics(TransformData* data)
 }
 
 //----------------------------------------------------------------------------------
+// GLB Data
+//----------------------------------------------------------------------------------
+
+// Structure for storing GLB model and animation data
+typedef struct
+{
+    Model model;                    // Loaded GLB model (with skeleton)
+    ModelAnimation* animations;     // Loaded animations array
+    int animCount;                  // Number of animations
+    int activeAnim;                 // Currently active animation index
+    float frameTime;                // Internal sampling step used by raylib's GLTF loader
+    int* sourceFrameCounts;         // Original glTF timeline frame counts per animation
+    float* sourceFrameTimes;        // Original glTF timeline frame times per animation
+    int* topoOrder;                 // Maps sorted index -> original bone index
+    int* invTopoOrder;              // Maps original bone index -> sorted index
+} GLBData;
+
+// Initialize GLBData to safe state
+static inline void GLBDataInit(GLBData* data)
+{
+    data->model = (Model){ 0 };
+    data->animations = NULL;
+    data->animCount = 0;
+    data->activeAnim = 0;
+    data->frameTime = 1.0f / 30.0f;
+    data->sourceFrameCounts = NULL;
+    data->sourceFrameTimes = NULL;
+    data->topoOrder = NULL;
+    data->invTopoOrder = NULL;
+}
+
+// Free GLB model and animation data
+static inline void GLBDataFree(GLBData* data)
+{
+    if (data->animations != NULL)
+    {
+        UnloadModelAnimations(data->animations, data->animCount);
+        data->animations = NULL;
+    }
+    // Check if model was loaded by verifying if bones or meshes exist
+    if (data->model.skeleton.boneCount > 0 || data->model.meshCount > 0)
+    {
+        UnloadModel(data->model);
+    }
+    free(data->sourceFrameCounts);
+    free(data->sourceFrameTimes);
+    free(data->topoOrder);
+    free(data->invTopoOrder);
+    data->model = (Model){ 0 };
+    data->animCount = 0;
+    data->activeAnim = 0;
+    data->frameTime = 1.0f / 30.0f;
+    data->sourceFrameCounts = NULL;
+    data->sourceFrameTimes = NULL;
+    data->topoOrder = NULL;
+    data->invTopoOrder = NULL;
+}
+
+static inline int GLBDataGetSourceFrameCount(const GLBData* data, int animIdx)
+{
+    if (data->animCount <= 0) return 0;
+
+    animIdx = ClampInt(animIdx, 0, data->animCount - 1);
+
+    if (data->sourceFrameCounts != NULL && data->sourceFrameCounts[animIdx] > 0)
+        return data->sourceFrameCounts[animIdx];
+
+    return data->animations[animIdx].keyframeCount;
+}
+
+static inline float GLBDataGetSourceFrameTime(const GLBData* data, int animIdx)
+{
+    if (data->animCount <= 0) return data->frameTime;
+
+    animIdx = ClampInt(animIdx, 0, data->animCount - 1);
+
+    if (data->sourceFrameTimes != NULL && data->sourceFrameTimes[animIdx] > 0.0f)
+        return data->sourceFrameTimes[animIdx];
+
+    return data->frameTime;
+}
+
+static bool GLBAnimationTargetsSkinJoint(const cgltf_skin* skin, const cgltf_node* node)
+{
+    if (skin == NULL || node == NULL) return false;
+
+    for (cgltf_size i = 0; i < skin->joints_count; i++)
+    {
+        if (skin->joints[i] == node) return true;
+    }
+
+    return false;
+}
+
+static bool GLBDataLoadSourceTiming(GLBData* data, const char* filename)
+{
+    if (data->animCount <= 0) return true;
+
+    cgltf_options options = { 0 };
+    cgltf_data* gltfData = NULL;
+    cgltf_result result = cgltf_parse_file(&options, filename, &gltfData);
+
+    if (result != cgltf_result_success)
+    {
+        printf("WARN: Failed to parse GLB timing data for '%s'\n", filename);
+        return false;
+    }
+
+    result = cgltf_load_buffers(&options, gltfData, filename);
+    if (result != cgltf_result_success)
+    {
+        printf("WARN: Failed to load GLB timing buffers for '%s'\n", filename);
+        cgltf_free(gltfData);
+        return false;
+    }
+
+    const cgltf_skin* skin = (gltfData->skins_count > 0) ? &gltfData->skins[0] : NULL;
+    int parsedAnimCount = (data->animCount < (int)gltfData->animations_count) ? data->animCount : (int)gltfData->animations_count;
+
+    for (int a = 0; a < parsedAnimCount; a++)
+    {
+        cgltf_animation* anim = &gltfData->animations[a];
+        float duration = 0.0f;
+        float minDelta = FLT_MAX;
+        int maxInputCount = 0;
+        bool hasTimeSamples = false;
+
+        for (cgltf_size channelIdx = 0; channelIdx < anim->channels_count; channelIdx++)
+        {
+            cgltf_animation_channel* channel = &anim->channels[channelIdx];
+            cgltf_animation_sampler* sampler = channel->sampler;
+
+            if (skin != NULL && !GLBAnimationTargetsSkinJoint(skin, channel->target_node)) continue;
+            if (sampler == NULL || sampler->input == NULL || sampler->input->count == 0) continue;
+
+            int inputCount = (int)sampler->input->count;
+            if (inputCount > maxInputCount) maxInputCount = inputCount;
+
+            float prevTime = 0.0f;
+            bool hasPrevTime = false;
+
+            for (int sampleIdx = 0; sampleIdx < inputCount; sampleIdx++)
+            {
+                float time = 0.0f;
+                if (!cgltf_accessor_read_float(sampler->input, sampleIdx, &time, 1)) break;
+
+                hasTimeSamples = true;
+                if (time > duration) duration = time;
+
+                if (hasPrevTime)
+                {
+                    float delta = time - prevTime;
+                    if (delta > 1e-6f && delta < minDelta) minDelta = delta;
+                }
+
+                prevTime = time;
+                hasPrevTime = true;
+            }
+        }
+
+        if (!hasTimeSamples) continue;
+
+        int frameCount = maxInputCount > 0 ? maxInputCount : 1;
+        float frameTime = data->frameTime;
+
+        if (minDelta < FLT_MAX)
+        {
+            frameTime = minDelta;
+            frameCount = 1 + (int)(duration / frameTime + 0.5f);
+        }
+        else if (frameCount > 1 && duration > 0.0f)
+        {
+            frameTime = duration / (float)(frameCount - 1);
+        }
+
+        if (frameCount < 1) frameCount = 1;
+        if (frameTime <= 0.0f) frameTime = data->frameTime;
+
+        data->sourceFrameCounts[a] = frameCount;
+        data->sourceFrameTimes[a] = frameTime;
+    }
+
+    cgltf_free(gltfData);
+    return true;
+}
+
+// Compute topological order so every parent bone appears before its children.
+// GLTF does not guarantee this ordering in the joints array.
+// topoOrder[sortedIdx] = originalBoneIdx
+// invTopoOrder[originalBoneIdx] = sortedIdx
+static void ComputeTopoOrder(int boneCount, BoneInfo* bones, int* topoOrder, int* invTopoOrder)
+{
+    for (int i = 0; i < boneCount; i++) invTopoOrder[i] = -1;
+
+    bool* placed = (bool*)calloc(boneCount, sizeof(bool));
+    int idx = 0;
+    while (idx < boneCount)
+    {
+        int prevIdx = idx;
+        for (int i = 0; i < boneCount; i++)
+        {
+            if (placed[i]) continue;
+            int p = bones[i].parent;
+            if (p == -1 || invTopoOrder[p] != -1)
+            {
+                topoOrder[idx] = i;
+                invTopoOrder[i] = idx;
+                placed[i] = true;
+                idx++;
+            }
+        }
+        if (idx == prevIdx) break; // cycle guard
+    }
+    free(placed);
+}
+
+// Load a GLB/GLTF model and its animations
+static bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSize)
+{
+    printf("INFO: Loading GLB '%s'\n", filename);
+
+    // Check file extension
+    const char* ext = strrchr(filename, '.');
+    if (ext == NULL ||
+        (strcmp(ext, ".glb") != 0 && strcmp(ext, ".GLB") != 0 &&
+         strcmp(ext, ".gltf") != 0 && strcmp(ext, ".GLTF") != 0))
+    {
+        snprintf(errMsg, errMsgSize, "Error: File '%s' is not a .glb/.gltf file", filename);
+        return false;
+    }
+
+    // Load model (this also loads the skeleton)
+    data->model = LoadModel(filename);
+    
+    // Check that model has a skeleton (we only care about bones, not meshes)
+    if (data->model.skeleton.boneCount == 0)
+    {
+        if (data->model.meshCount > 0) UnloadModel(data->model);
+        snprintf(errMsg, errMsgSize, "Error: Model '%s' has no skeleton (no bones)", filename);
+        printf("ERROR: %s\n", errMsg);
+        return false;
+    }
+
+    // Load animations
+    data->animations = LoadModelAnimations(filename, &data->animCount);
+    if (data->animCount == 0)
+    {
+        UnloadModel(data->model);
+        snprintf(errMsg, errMsgSize, "Error: Model '%s' has no animations", filename);
+        printf("ERROR: %s\n", errMsg);
+        return false;
+    }
+
+    data->activeAnim = 0;
+    data->frameTime = 1.0f / 60.0f; // raylib resamples GLTF at GLTF_FRAMERATE = 60 fps
+    data->sourceFrameCounts = (int*)malloc(data->animCount * sizeof(int));
+    data->sourceFrameTimes = (float*)malloc(data->animCount * sizeof(float));
+
+    if (data->sourceFrameCounts == NULL || data->sourceFrameTimes == NULL)
+    {
+        GLBDataFree(data);
+        snprintf(errMsg, errMsgSize, "Error: Out of memory while loading animation timing for '%s'", filename);
+        printf("ERROR: %s\n", errMsg);
+        return false;
+    }
+
+    for (int a = 0; a < data->animCount; a++)
+    {
+        data->sourceFrameCounts[a] = data->animations[a].keyframeCount;
+        data->sourceFrameTimes[a] = data->frameTime;
+    }
+
+    GLBDataLoadSourceTiming(data, filename);
+
+    // Compute topological bone order (parent always before child)
+    int bc = data->model.skeleton.boneCount;
+    data->topoOrder    = (int*)malloc(bc * sizeof(int));
+    data->invTopoOrder = (int*)malloc(bc * sizeof(int));
+    ComputeTopoOrder(bc, data->model.skeleton.bones, data->topoOrder, data->invTopoOrder);
+
+    printf("INFO: Loaded '%s' - %d bones, %d animations\n",
+        filename, bc, data->animCount);
+
+    return true;
+}
+
+// Sample the current animation frame from GLB into TransformData.
+// raylib's GLTF loader stores currentPose/keyframePoses in GLOBAL (model) space
+// because LoadModelAnimations() applies BuildPoseFromParentJoints. We therefore
+// convert global -> local here in topological order, so the existing
+// TransformDataForwardKinematics() can re-derive correct globalPositions.
+// scale is applied to all local translations (e.g. 0.01 for cm -> m).
+static void TransformDataSampleFrameGLB(
+    TransformData* data,
+    GLBData* glb,
+    float frame,
+    float scale)
+{
+    if (glb->animCount == 0) { return; }
+    if (glb->model.currentPose == NULL) { return; }
+    if (glb->model.boneMatrices == NULL) { return; }
+    if (glb->topoOrder == NULL) { return; }
+
+    int animIdx = glb->activeAnim;
+    ModelAnimation anim = glb->animations[animIdx];
+
+    // Clamp to valid range while keeping fractional part for raylib's built-in lerp
+    float frameClamped = frame;
+    if (frameClamped < 0.0f) frameClamped = 0.0f;
+    if (frameClamped > (float)(anim.keyframeCount - 1)) frameClamped = (float)(anim.keyframeCount - 1);
+
+    UpdateModelAnimation(glb->model, anim, frameClamped);
+
+    int n = data->jointCount;
+    if (n > glb->model.skeleton.boneCount) n = glb->model.skeleton.boneCount;
+
+    for (int i = 0; i < n; i++)
+    {
+        int orig = glb->topoOrder[i];
+        Vector3 gPos    = glb->model.currentPose[orig].translation;
+        Quaternion gRot = glb->model.currentPose[orig].rotation;
+        int parent = data->parents[i];
+
+        if (parent == -1)
+        {
+            data->localPositions[i] = Vector3Scale(gPos, scale);
+            data->localRotations[i] = gRot;
+        }
+        else
+        {
+            int origParent       = glb->topoOrder[parent];
+            Vector3 pPos         = glb->model.currentPose[origParent].translation;
+            Quaternion pRot      = glb->model.currentPose[origParent].rotation;
+            Quaternion invPRot   = QuaternionInvert(pRot);
+
+            Vector3 delta = Vector3Subtract(gPos, pPos);
+            data->localPositions[i] = Vector3Scale(Vector3RotateByQuaternion(delta, invPRot), scale);
+            data->localRotations[i] = QuaternionMultiply(invPRot, gRot);
+        }
+    }
+}
+
+// Resize TransformData with explicit joint count and bone/parent info
+// This is needed when loading GLB data (no BVHData available)
+static inline void TransformDataResizeSimple(
+    TransformData* data,
+    int jointCount,
+    int* parents,
+    bool* endSite)
+{
+    data->jointCount = jointCount;
+    data->parents = realloc(data->parents, jointCount * sizeof(int));
+    data->endSite = realloc(data->endSite, jointCount * sizeof(bool));
+    data->localPositions = realloc(data->localPositions, jointCount * sizeof(Vector3));
+    data->localRotations = realloc(data->localRotations, jointCount * sizeof(Quaternion));
+    data->globalPositions = realloc(data->globalPositions, jointCount * sizeof(Vector3));
+    data->globalRotations = realloc(data->globalRotations, jointCount * sizeof(Quaternion));
+
+    for (int i = 0; i < jointCount; i++)
+    {
+        data->parents[i] = parents[i];
+        data->endSite[i] = endSite[i];
+    }
+}
+
+//----------------------------------------------------------------------------------
 // Character Data
 //----------------------------------------------------------------------------------
 
@@ -1448,6 +1815,10 @@ typedef struct {
 
     // If the color picker is active
     bool colorPickerActive;
+    
+    // GLB-specific data
+    bool isGLB[CHARACTERS_MAX];
+    GLBData glbData[CHARACTERS_MAX];
 
 } CharacterData;
 
@@ -1485,6 +1856,8 @@ static inline void CharacterDataInit(CharacterData* data, int argc, char** argv)
         TransformDataInit(&data->xformTmp2[i]);
         TransformDataInit(&data->xformTmp3[i]);
         data->jointNamesCombo[i] = NULL;
+        data->isGLB[i] = false;
+        GLBDataInit(&data->glbData[i]);
     }
 
     data->colorPickerActive = ArgBool(argc, argv, "colorPickerActive", false);
@@ -1494,12 +1867,19 @@ static inline void CharacterDataFree(CharacterData* data)
 {
     for (int i = 0; i < data->count; i++)
     {
+        if (data->isGLB[i])
+        {
+            GLBDataFree(&data->glbData[i]);
+        }
+        else
+        {
+            BVHDataFree(&data->bvhData[i]);
+        }
         TransformDataFree(&data->xformData[i]);
         TransformDataFree(&data->xformTmp0[i]);
         TransformDataFree(&data->xformTmp1[i]);
         TransformDataFree(&data->xformTmp2[i]);
         TransformDataFree(&data->xformTmp3[i]);
-        BVHDataFree(&data->bvhData[i]);
         free(data->jointNamesCombo[i]);
     }
 }
@@ -1515,17 +1895,47 @@ static bool CharacterDataLoadFromFile(
 
     if (data->count == CHARACTERS_MAX)
     {
-        snprintf(errMsg, 512, "Error: Maximum number of BVH files loaded (%i)", CHARACTERS_MAX);
+        snprintf(errMsg, 512, "Error: Maximum number of animation files loaded (%i)", CHARACTERS_MAX);
         return false;
     }
 
-    if (BVHDataLoad(&data->bvhData[data->count], path, errMsg, errMsgSize))
+    // Detect file type by extension
+    const char* ext = strrchr(path, '.');
+    bool isGLB = (ext != NULL) && (strcmp(ext, ".glb") == 0 || strcmp(ext, ".GLB") == 0 ||
+                  strcmp(ext, ".gltf") == 0 || strcmp(ext, ".GLTF") == 0);
+
+    if (isGLB)
     {
-        TransformDataResize(&data->xformData[data->count], &data->bvhData[data->count]);
-        TransformDataResize(&data->xformTmp0[data->count], &data->bvhData[data->count]);
-        TransformDataResize(&data->xformTmp1[data->count], &data->bvhData[data->count]);
-        TransformDataResize(&data->xformTmp2[data->count], &data->bvhData[data->count]);
-        TransformDataResize(&data->xformTmp3[data->count], &data->bvhData[data->count]);
+        // --- GLB/GLTF loading path ---
+        if (!GLBDataLoad(&data->glbData[data->count], path, errMsg, errMsgSize))
+        {
+            printf("INFO: Failed to Load '%s'\n", path);
+            return false;
+        }
+
+        data->isGLB[data->count] = true;
+
+        // Build parent and endSite arrays in topological order
+        GLBData* glb = &data->glbData[data->count];
+        int jointCount = glb->model.skeleton.boneCount;
+        int* parents = malloc(jointCount * sizeof(int));
+        bool* endSite = malloc(jointCount * sizeof(bool));
+        for (int j = 0; j < jointCount; j++)
+        {
+            int origIdx    = glb->topoOrder[j];
+            int origParent = glb->model.skeleton.bones[origIdx].parent;
+            parents[j] = (origParent == -1) ? -1 : glb->invTopoOrder[origParent];
+            endSite[j] = false;
+        }
+
+        TransformDataResizeSimple(&data->xformData[data->count], jointCount, parents, endSite);
+        TransformDataResizeSimple(&data->xformTmp0[data->count], jointCount, parents, endSite);
+        TransformDataResizeSimple(&data->xformTmp1[data->count], jointCount, parents, endSite);
+        TransformDataResizeSimple(&data->xformTmp2[data->count], jointCount, parents, endSite);
+        TransformDataResizeSimple(&data->xformTmp3[data->count], jointCount, parents, endSite);
+
+        free(parents);
+        free(endSite);
 
         snprintf(data->filePaths[data->count], 512, "%s", path);
 
@@ -1534,59 +1944,118 @@ static bool CharacterDataLoadFromFile(
         while (strchr(filename, '\\')) { filename = strchr(filename, '\\') + 1; }
 
         snprintf(data->names[data->count], 128, "%s", filename);
-        data->scales[data->count] = 1.0f;
 
-        // Auto-Scaling and unit detection
-
-        if (data->bvhData[data->count].frameCount > 0)
-        {
-            TransformDataSampleFrame(&data->xformData[data->count], &data->bvhData[data->count], 0, 1.0f);
-            TransformDataForwardKinematics(&data->xformData[data->count]);
-
-            float height = 1e-8f;
-            for (int j = 0; j < data->xformData[data->count].jointCount; j++)
-            {
-                height = Max(height, data->xformData[data->count].globalPositions[j].y);
-            }
-
-            data->scales[data->count] = height > 10.0f ? 0.01f : 1.0f;
-            data->autoScales[data->count] = 1.8 / height;
-        }
-        else
-        {
-            data->autoScales[data->count] = 1.0f;
-        }
-        
-        // Joint names combo
-
+        // Joint names combo in topological order (matches xformData indexing)
         int comboTotalSize = 0;
-        for (int i = 0; i < data->bvhData[data->count].jointCount; i++)
+        for (int j = 0; j < jointCount; j++)
         {
-            comboTotalSize += (i > 0 ? 1 : 0) + strlen(data->bvhData[data->count].joints[i].name);
+            int origIdx = glb->topoOrder[j];
+            comboTotalSize += (j > 0 ? 1 : 0) + (int)strlen(glb->model.skeleton.bones[origIdx].name);
         }
         comboTotalSize++;
 
         data->jointNamesCombo[data->count] = malloc(comboTotalSize);
         data->jointNamesCombo[data->count][0] = '\0';
-        for (int i = 0; i < data->bvhData[data->count].jointCount; i++)
+        for (int j = 0; j < jointCount; j++)
         {
-            if (i > 0)
-            {
-                strcat(data->jointNamesCombo[data->count], ";");
-            }
-            strcat(data->jointNamesCombo[data->count], data->bvhData[data->count].joints[i].name);
+            int origIdx = glb->topoOrder[j];
+            if (j > 0) strcat(data->jointNamesCombo[data->count], ";");
+            strcat(data->jointNamesCombo[data->count], glb->model.skeleton.bones[origIdx].name);
         }
 
-        // Done
+        // Sample frame 0 at unit scale to measure skeleton height for auto-scale
+        TransformDataSampleFrameGLB(&data->xformData[data->count], glb, 0, 1.0f);
+        TransformDataForwardKinematics(&data->xformData[data->count]);
+
+        float height = 1e-8f;
+        for (int j = 0; j < data->xformData[data->count].jointCount; j++)
+        {
+            height = Max(height, data->xformData[data->count].globalPositions[j].y);
+        }
+        data->scales[data->count]    = height > 10.0f ? 0.01f : 1.0f;
+        data->autoScales[data->count] = 1.8f / height;
+
+        // Re-sample with detected scale so initial pose is correct
+        TransformDataSampleFrameGLB(&data->xformData[data->count], glb, 0, data->scales[data->count]);
+        TransformDataForwardKinematics(&data->xformData[data->count]);
 
         data->count++;
-
         return true;
     }
     else
     {
-        printf("INFO: Failed to Load '%s'\n", path);
-        return false;
+        // --- BVH loading path ---
+        if (BVHDataLoad(&data->bvhData[data->count], path, errMsg, errMsgSize))
+        {
+            data->isGLB[data->count] = false;
+
+            TransformDataResize(&data->xformData[data->count], &data->bvhData[data->count]);
+            TransformDataResize(&data->xformTmp0[data->count], &data->bvhData[data->count]);
+            TransformDataResize(&data->xformTmp1[data->count], &data->bvhData[data->count]);
+            TransformDataResize(&data->xformTmp2[data->count], &data->bvhData[data->count]);
+            TransformDataResize(&data->xformTmp3[data->count], &data->bvhData[data->count]);
+
+            snprintf(data->filePaths[data->count], 512, "%s", path);
+
+            const char* filename = path;
+            while (strchr(filename, '/')) { filename = strchr(filename, '/') + 1; }
+            while (strchr(filename, '\\')) { filename = strchr(filename, '\\') + 1; }
+
+            snprintf(data->names[data->count], 128, "%s", filename);
+            data->scales[data->count] = 1.0f;
+
+            // Auto-Scaling and unit detection
+
+            if (data->bvhData[data->count].frameCount > 0)
+            {
+                TransformDataSampleFrame(&data->xformData[data->count], &data->bvhData[data->count], 0, 1.0f);
+                TransformDataForwardKinematics(&data->xformData[data->count]);
+
+                float height = 1e-8f;
+                for (int j = 0; j < data->xformData[data->count].jointCount; j++)
+                {
+                    height = Max(height, data->xformData[data->count].globalPositions[j].y);
+                }
+
+                data->scales[data->count] = height > 10.0f ? 0.01f : 1.0f;
+                data->autoScales[data->count] = 1.8 / height;
+            }
+            else
+            {
+                data->autoScales[data->count] = 1.0f;
+            }
+            
+            // Joint names combo
+
+            int comboTotalSize = 0;
+            for (int i = 0; i < data->bvhData[data->count].jointCount; i++)
+            {
+                comboTotalSize += (i > 0 ? 1 : 0) + strlen(data->bvhData[data->count].joints[i].name);
+            }
+            comboTotalSize++;
+
+            data->jointNamesCombo[data->count] = malloc(comboTotalSize);
+            data->jointNamesCombo[data->count][0] = '\0';
+            for (int i = 0; i < data->bvhData[data->count].jointCount; i++)
+            {
+                if (i > 0)
+                {
+                    strcat(data->jointNamesCombo[data->count], ";");
+                }
+                strcat(data->jointNamesCombo[data->count], data->bvhData[data->count].joints[i].name);
+            }
+
+            // Done
+
+            data->count++;
+
+            return true;
+        }
+        else
+        {
+            printf("INFO: Failed to Load '%s'\n", path);
+            return false;
+        }
     }
 }
 
@@ -2573,7 +3042,7 @@ static inline void CapsuleDataUpdateForCharacters(CapsuleData* capsuleData, Char
     int totalJointCount = 0;
     for (int i = 0; i < characterData->count; i++)
     {
-        totalJointCount += characterData->bvhData[i].jointCount;
+        totalJointCount += characterData->xformData[i].jointCount;
     }
 
     CapsuleDataResize(capsuleData, totalJointCount);
@@ -3345,14 +3814,35 @@ static inline void ScrubberSettingsInit(ScrubberSettings* settings, int argc, ch
     settings->timeMax = 0.0f;
 }
 
+static inline int ScrubberGetFrameCount(CharacterData* characterData, int index)
+{
+    if (characterData->isGLB[index])
+    {
+        int animIdx = characterData->glbData[index].activeAnim;
+        if (characterData->glbData[index].animCount > 0)
+            return GLBDataGetSourceFrameCount(&characterData->glbData[index], animIdx);
+        return 0;
+    }
+    return characterData->bvhData[index].frameCount;
+}
+
+static inline float ScrubberGetFrameTime(CharacterData* characterData, int index)
+{
+    if (characterData->isGLB[index])
+        return GLBDataGetSourceFrameTime(&characterData->glbData[index], characterData->glbData[index].activeAnim);
+    return characterData->bvhData[index].frameTime;
+}
+
 static inline void ScrubberSettingsRecomputeLimits(ScrubberSettings* settings, CharacterData* characterData)
 {
     settings->frameLimit = 0;
     settings->timeLimit = 0.0f;
     for (int i = 0; i < characterData->count; i++)
     {
-        settings->frameLimit = MaxInt(settings->frameLimit, characterData->bvhData[i].frameCount - 1);
-        settings->timeLimit = Max(settings->timeLimit, (characterData->bvhData[i].frameCount - 1) * characterData->bvhData[i].frameTime);
+        int frameCount = ScrubberGetFrameCount(characterData, i);
+        float frameTime = ScrubberGetFrameTime(characterData, i);
+        settings->frameLimit = MaxInt(settings->frameLimit, frameCount - 1);
+        settings->timeLimit = Max(settings->timeLimit, (frameCount - 1) * frameTime);
     }
 }
 
@@ -3360,9 +3850,12 @@ static inline void ScrubberSettingsInitMaxs(ScrubberSettings* settings, Characte
 {
     if (characterData->count == 0) { return; }
 
-    settings->frameMax = characterData->bvhData[characterData->active].frameCount - 1;
+    int frameCount = ScrubberGetFrameCount(characterData, characterData->active);
+    float frameTime = ScrubberGetFrameTime(characterData, characterData->active);
+
+    settings->frameMax = frameCount - 1;
     settings->frameMaxSelect = settings->frameMax;
-    settings->timeMax = settings->frameMax * characterData->bvhData[characterData->active].frameTime;
+    settings->timeMax = settings->frameMax * frameTime;
 
     settings->frameMin = 0;
     settings->frameMinSelect = settings->frameMin;
@@ -3373,13 +3866,15 @@ static inline void ScrubberSettingsClamp(ScrubberSettings* settings, CharacterDa
 {
     if (characterData->count == 0) { return; }
 
+    float frameTime = ScrubberGetFrameTime(characterData, characterData->active);
+
     settings->frameMax = ClampInt(settings->frameMax, 0, settings->frameLimit);
     settings->frameMaxSelect = settings->frameMax;
-    settings->timeMax = settings->frameMax * characterData->bvhData[characterData->active].frameTime;
+    settings->timeMax = settings->frameMax * frameTime;
 
     settings->frameMin = ClampInt(settings->frameMin, 0, settings->frameMax);
     settings->frameMinSelect = settings->frameMin;
-    settings->timeMin = settings->frameMin * characterData->bvhData[characterData->active].frameTime;
+    settings->timeMin = settings->frameMin * frameTime;
 
     settings->playTime = Clamp(settings->playTime, settings->timeMin, settings->timeMax);
 }
@@ -3585,7 +4080,7 @@ static inline void GuiCharacterData(
 {
     int offsetHeight = 280;
   
-    GuiGroupBox((Rectangle){ 20, offsetHeight, 190, (CHARACTERS_MAX - 1) * 30 + 150 }, "Characters");
+    GuiGroupBox((Rectangle){ 20, offsetHeight, 190, (CHARACTERS_MAX - 1) * 30 + 180 }, "Characters");
 
 #if !defined(PLATFORM_WEB)
     if (GuiButton((Rectangle){ 30, offsetHeight + 10, 110, 20 }, "Open"))
@@ -3606,18 +4101,21 @@ static inline void GuiCharacterData(
     {
         char bvhNameShort[20];
         bvhNameShort[0] = '\0';
-        if (strlen(characterData->names[i]) + 1 <= 20)
+        if (strlen(characterData->names[i]) + 1 <= 18)
         {
             strcat(bvhNameShort, characterData->names[i]);
         }
         else
         {
-            memcpy(bvhNameShort, characterData->names[i], 16);
-            memcpy(bvhNameShort + 16, "...", 4);
+            memcpy(bvhNameShort, characterData->names[i], 14);
+            memcpy(bvhNameShort + 14, "...", 4);
         }
 
         bool bvhSelected = i == characterData->active;
-        GuiToggle((Rectangle){ 30, offsetHeight + 40 + i * 30, 140, 20 }, bvhNameShort, &bvhSelected);
+        GuiToggle((Rectangle){ 30, offsetHeight + 40 + i * 30, 120, 20 }, bvhNameShort, &bvhSelected);
+
+        // Show GLB/BVH type indicator
+        DrawText(characterData->isGLB[i] ? "GLB" : "BVH", 155, offsetHeight + 43 + i * 30, 10, GRAY);
 
         if (bvhSelected && (characterData->active != i))
         {
@@ -3645,38 +4143,71 @@ static inline void GuiCharacterData(
     
     if (characterData->count > 0)
     {
-        bool scaleM = characterData->scales[characterData->active] == 1.0f;
-        GuiToggle((Rectangle){ 30, offsetHeight + 60 + (CHARACTERS_MAX - 1) * 30, 30, 20 }, "m", &scaleM);
-        if (scaleM) { characterData->scales[characterData->active] = 1.0f; }
+        int active = characterData->active;
 
-        bool scaleCM = characterData->scales[characterData->active] == 0.01f;
-        GuiToggle((Rectangle){ 65, offsetHeight + 60 + (CHARACTERS_MAX - 1) * 30, 30, 20 }, "cm", &scaleCM);
-        if (scaleCM) { characterData->scales[characterData->active] = 0.01f; }
+        // GLB animation selector (only show if active character is GLB with multiple animations)
+        if (characterData->isGLB[active] && characterData->glbData[active].animCount > 1)
+        {
+            // Build animation names combo string
+            static char animCombo[256];
+            animCombo[0] = '\0';
+            for (int a = 0; a < characterData->glbData[active].animCount; a++)
+            {
+                if (a > 0) strcat(animCombo, ";");
+                if (strlen(characterData->glbData[active].animations[a].name) > 0)
+                    strcat(animCombo, characterData->glbData[active].animations[a].name);
+                else
+                    strcat(animCombo, TextFormat("Anim %d", a));
+            }
 
-        bool scaleInches = characterData->scales[characterData->active] == 0.0254f;
-        GuiToggle((Rectangle){ 100, offsetHeight + 60 + (CHARACTERS_MAX - 1) * 30, 30, 20 }, "inch", &scaleInches);
-        if (scaleInches) { characterData->scales[characterData->active] = 0.0254f; }
+            int prevAnim = characterData->glbData[active].activeAnim;
+            GuiComboBox((Rectangle){ 30, offsetHeight + 60 + (CHARACTERS_MAX - 1) * 30, 150, 20 }, animCombo, &characterData->glbData[active].activeAnim);
 
-        bool scaleFeet = characterData->scales[characterData->active] == 0.3048f;
-        GuiToggle((Rectangle){ 135, offsetHeight + 60 + (CHARACTERS_MAX - 1) * 30, 30, 20 }, "feet", &scaleFeet);
-        if (scaleFeet) { characterData->scales[characterData->active] = 0.3048f; }
+            if (characterData->glbData[active].activeAnim != prevAnim)
+            {
+                // Animation changed - reset scrubber
+                ScrubberSettingsRecomputeLimits(scrubberSettings, characterData);
+                ScrubberSettingsInitMaxs(scrubberSettings, characterData);
+            }
+        }
 
-        bool scaleAuto = characterData->scales[characterData->active] == characterData->autoScales[characterData->active];
-        GuiToggle((Rectangle){ 170, offsetHeight + 60 + (CHARACTERS_MAX - 1) * 30, 30, 20 }, "auto", &scaleAuto);
-        if (scaleAuto) { characterData->scales[characterData->active] = characterData->autoScales[characterData->active]; }
+        // Scale controls (offset depends on whether animation selector is shown)
+        int scaleY = offsetHeight + 60 + (CHARACTERS_MAX - 1) * 30;
+        if (characterData->isGLB[active] && characterData->glbData[active].animCount > 1)
+            scaleY += 30;
+
+        bool scaleM = characterData->scales[active] == 1.0f;
+        GuiToggle((Rectangle){ 30, scaleY, 30, 20 }, "m", &scaleM);
+        if (scaleM) { characterData->scales[active] = 1.0f; }
+
+        bool scaleCM = characterData->scales[active] == 0.01f;
+        GuiToggle((Rectangle){ 65, scaleY, 30, 20 }, "cm", &scaleCM);
+        if (scaleCM) { characterData->scales[active] = 0.01f; }
+
+        bool scaleInches = characterData->scales[active] == 0.0254f;
+        GuiToggle((Rectangle){ 100, scaleY, 30, 20 }, "inch", &scaleInches);
+        if (scaleInches) { characterData->scales[active] = 0.0254f; }
+
+        bool scaleFeet = characterData->scales[active] == 0.3048f;
+        GuiToggle((Rectangle){ 135, scaleY, 30, 20 }, "feet", &scaleFeet);
+        if (scaleFeet) { characterData->scales[active] = 0.3048f; }
+
+        bool scaleAuto = characterData->scales[active] == characterData->autoScales[active];
+        GuiToggle((Rectangle){ 170, scaleY, 30, 20 }, "auto", &scaleAuto);
+        if (scaleAuto) { characterData->scales[active] = characterData->autoScales[active]; }
 
         GuiSliderBar(
-            (Rectangle){ 70, offsetHeight + 90 + (CHARACTERS_MAX - 1) * 30, 100, 20 },
+            (Rectangle){ 70, scaleY + 30, 100, 20 },
             "Radius",
-            TextFormat("%5.2f", characterData->radii[characterData->active]),
-            &characterData->radii[characterData->active],
+            TextFormat("%5.2f", characterData->radii[active]),
+            &characterData->radii[active],
             0.01f, 0.1f);
 
         GuiSliderBar(
-            (Rectangle){ 70, offsetHeight + 120 + (CHARACTERS_MAX - 1) * 30, 100, 20 },
+            (Rectangle){ 70, scaleY + 60, 100, 20 },
             "Opacity",
-            TextFormat("%5.2f", characterData->opacities[characterData->active]),
-            &characterData->opacities[characterData->active],
+            TextFormat("%5.2f", characterData->opacities[active]),
+            &characterData->opacities[active],
             0.0f, 1.0f);
     }
 }
@@ -3689,7 +4220,7 @@ static inline void GuiScrubberSettings(
 {
     if (characterData->count == 0) { return; }
 
-    float frameTime = characterData->bvhData[characterData->active].frameTime;
+    float frameTime = ScrubberGetFrameTime(characterData, characterData->active);
 
     GuiGroupBox((Rectangle){ screenWidth / 2 - 600, screenHeight - 100, 1200, 90 }, "Scrubber");
 
@@ -3811,7 +4342,9 @@ static void ApplicationUpdate(void* voidApplicationState)
 
     if (app->fileDialogState.SelectFilePressed)
     {
-        if (IsFileExtension(app->fileDialogState.fileNameText, ".bvh"))
+        if (IsFileExtension(app->fileDialogState.fileNameText, ".bvh") ||
+            IsFileExtension(app->fileDialogState.fileNameText, ".glb") ||
+            IsFileExtension(app->fileDialogState.fileNameText, ".gltf"))
         {
             char fileNameToLoad[512];
             snprintf(fileNameToLoad, 512, "%s/%s", app->fileDialogState.dirPathText, app->fileDialogState.fileNameText);
@@ -3831,7 +4364,7 @@ static void ApplicationUpdate(void* voidApplicationState)
         }
         else
         {
-            snprintf(app->errMsg, 512, "Error: File '%s' is not a BVH file.", app->fileDialogState.fileNameText);
+            snprintf(app->errMsg, 512, "Error: File '%s' is not a supported animation file (.bvh, .glb, .gltf).", app->fileDialogState.fileNameText);
         }
 
         app->fileDialogState.SelectFilePressed = false;
@@ -3894,7 +4427,18 @@ static void ApplicationUpdate(void* voidApplicationState)
 
     for (int i = 0; i < app->characterData.count; i++)
     {
-        if (app->scrubberSettings.sampleMode == 0)
+        if (app->characterData.isGLB[i])
+        {
+            // GLB animation: sample from model pose
+            float frame = app->scrubberSettings.playTime /
+                app->characterData.glbData[i].frameTime;
+            TransformDataSampleFrameGLB(
+                &app->characterData.xformData[i],
+                &app->characterData.glbData[i],
+                frame,
+                app->characterData.scales[i]);
+        }
+        else if (app->scrubberSettings.sampleMode == 0)
         {
             TransformDataSampleFrameNearest(
                 &app->characterData.xformData[i],
@@ -4311,8 +4855,8 @@ static void ApplicationUpdate(void* voidApplicationState)
 
         if (app->characterData.count == 0)
         {
-            DrawText("Drag and Drop .bvh files to open them.",
-              app->screenWidth / 2 - 300, app->screenHeight / 2 - 15, 30, DARKGRAY);
+            DrawText("Drag and Drop .bvh / .glb / .gltf files to open them.",
+              app->screenWidth / 2 - 370, app->screenHeight / 2 - 15, 30, DARKGRAY);
         }
 
         // Render Settings
