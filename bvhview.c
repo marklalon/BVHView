@@ -1408,6 +1408,13 @@ typedef struct
     float frameTime;                // Internal sampling step used by raylib's GLTF loader
     int* sourceFrameCounts;         // Original glTF timeline frame counts per animation
     float* sourceFrameTimes;        // Original glTF timeline frame times per animation
+    float* sourceDurations;         // Original glTF animation durations in seconds
+    cgltf_data* sourceData;         // Parsed glTF data for exact runtime sampling
+    cgltf_skin* sourceSkin;         // Skin used for exact runtime sampling
+    Transform* sourceRestPose;      // Default local joint transforms in original bone order
+    Transform* sourceLocalPose;     // Temporary local pose buffer in original bone order
+    Transform* sourceGlobalPose;    // Temporary global pose buffer in original bone order
+    Transform* sourceRootPose;      // External parent world transforms for root joints
     int* topoOrder;                 // Maps sorted index -> original bone index
     int* invTopoOrder;              // Maps original bone index -> sorted index
 } GLBData;
@@ -1422,6 +1429,13 @@ static inline void GLBDataInit(GLBData* data)
     data->frameTime = 1.0f / 30.0f;
     data->sourceFrameCounts = NULL;
     data->sourceFrameTimes = NULL;
+    data->sourceDurations = NULL;
+    data->sourceData = NULL;
+    data->sourceSkin = NULL;
+    data->sourceRestPose = NULL;
+    data->sourceLocalPose = NULL;
+    data->sourceGlobalPose = NULL;
+    data->sourceRootPose = NULL;
     data->topoOrder = NULL;
     data->invTopoOrder = NULL;
 }
@@ -1441,6 +1455,12 @@ static inline void GLBDataFree(GLBData* data)
     }
     free(data->sourceFrameCounts);
     free(data->sourceFrameTimes);
+    free(data->sourceDurations);
+    free(data->sourceRestPose);
+    free(data->sourceLocalPose);
+    free(data->sourceGlobalPose);
+    free(data->sourceRootPose);
+    if (data->sourceData != NULL) cgltf_free(data->sourceData);
     free(data->topoOrder);
     free(data->invTopoOrder);
     data->model = (Model){ 0 };
@@ -1449,6 +1469,13 @@ static inline void GLBDataFree(GLBData* data)
     data->frameTime = 1.0f / 30.0f;
     data->sourceFrameCounts = NULL;
     data->sourceFrameTimes = NULL;
+    data->sourceDurations = NULL;
+    data->sourceData = NULL;
+    data->sourceSkin = NULL;
+    data->sourceRestPose = NULL;
+    data->sourceLocalPose = NULL;
+    data->sourceGlobalPose = NULL;
+    data->sourceRootPose = NULL;
     data->topoOrder = NULL;
     data->invTopoOrder = NULL;
 }
@@ -1477,6 +1504,196 @@ static inline float GLBDataGetSourceFrameTime(const GLBData* data, int animIdx)
     return data->frameTime;
 }
 
+static inline float GLBDataGetSourceDuration(const GLBData* data, int animIdx)
+{
+    if (data->animCount <= 0) return 0.0f;
+
+    animIdx = ClampInt(animIdx, 0, data->animCount - 1);
+
+    if (data->sourceDurations != NULL && data->sourceDurations[animIdx] > 0.0f)
+        return data->sourceDurations[animIdx];
+
+    return (GLBDataGetSourceFrameCount(data, animIdx) - 1) * GLBDataGetSourceFrameTime(data, animIdx);
+}
+
+static Matrix GLBMatrixFromCgltf(const cgltf_float* m)
+{
+    return (Matrix){
+        m[0], m[4], m[8], m[12],
+        m[1], m[5], m[9], m[13],
+        m[2], m[6], m[10], m[14],
+        m[3], m[7], m[11], m[15]
+    };
+}
+
+static Transform GLBNodeLocalTransform(const cgltf_node* node)
+{
+    Transform transform = {
+        .translation = { 0.0f, 0.0f, 0.0f },
+        .rotation = { 0.0f, 0.0f, 0.0f, 1.0f },
+        .scale = { 1.0f, 1.0f, 1.0f }
+    };
+
+    if (node == NULL) return transform;
+
+    if (node->has_matrix)
+    {
+        MatrixDecompose(GLBMatrixFromCgltf(node->matrix), &transform.translation, &transform.rotation, &transform.scale);
+        transform.rotation = QuaternionNormalize(transform.rotation);
+        return transform;
+    }
+
+    if (node->has_translation)
+    {
+        transform.translation = (Vector3){ node->translation[0], node->translation[1], node->translation[2] };
+    }
+
+    if (node->has_rotation)
+    {
+        transform.rotation = QuaternionNormalize((Quaternion){ node->rotation[0], node->rotation[1], node->rotation[2], node->rotation[3] });
+    }
+
+    if (node->has_scale)
+    {
+        transform.scale = (Vector3){ node->scale[0], node->scale[1], node->scale[2] };
+    }
+
+    return transform;
+}
+
+static int GLBFindSkinJointIndex(const cgltf_skin* skin, const cgltf_node* node)
+{
+    if (skin == NULL || node == NULL) return -1;
+
+    for (cgltf_size i = 0; i < skin->joints_count; i++)
+    {
+        if (skin->joints[i] == node) return (int)i;
+    }
+
+    return -1;
+}
+
+static bool GLBGetPoseAtTime(
+    cgltf_interpolation_type interpolationType,
+    cgltf_accessor* input,
+    cgltf_accessor* output,
+    float time,
+    void* data)
+{
+    if (interpolationType >= cgltf_interpolation_type_max_enum) return false;
+    if (input == NULL || output == NULL || input->count == 0) return false;
+
+    float tstart = 0.0f;
+    float tend = 0.0f;
+    int keyframe = 0;
+
+    if (input->count == 1)
+    {
+        if (!cgltf_accessor_read_float(input, 0, &tstart, 1)) return false;
+        tend = tstart;
+    }
+    else
+    {
+        for (int i = 0; i < (int)input->count - 1; i++)
+        {
+            if (!cgltf_accessor_read_float(input, i, &tstart, 1)) return false;
+            if (!cgltf_accessor_read_float(input, i + 1, &tend, 1)) return false;
+
+            keyframe = i;
+            if ((tstart <= time) && (time < tend)) break;
+        }
+    }
+
+    if (FloatEquals(tend, tstart)) interpolationType = cgltf_interpolation_type_step;
+
+    float duration = fmaxf(tend - tstart, EPSILON);
+    float t = Clamp((time - tstart) / duration, 0.0f, 1.0f);
+
+    if (output->component_type != cgltf_component_type_r_32f) return false;
+
+    if (output->type == cgltf_type_vec3)
+    {
+        switch (interpolationType)
+        {
+            case cgltf_interpolation_type_step:
+            {
+                float tmp[3] = { 0.0f };
+                cgltf_accessor_read_float(output, keyframe, tmp, 3);
+                *(Vector3*)data = (Vector3){ tmp[0], tmp[1], tmp[2] };
+            } break;
+            case cgltf_interpolation_type_linear:
+            {
+                float tmp[3] = { 0.0f };
+                cgltf_accessor_read_float(output, keyframe, tmp, 3);
+                Vector3 v1 = { tmp[0], tmp[1], tmp[2] };
+                cgltf_accessor_read_float(output, keyframe + 1, tmp, 3);
+                Vector3 v2 = { tmp[0], tmp[1], tmp[2] };
+                *(Vector3*)data = Vector3Lerp(v1, v2, t);
+            } break;
+            case cgltf_interpolation_type_cubic_spline:
+            {
+                float tmp[3] = { 0.0f };
+                cgltf_accessor_read_float(output, 3*keyframe + 1, tmp, 3);
+                Vector3 v1 = { tmp[0], tmp[1], tmp[2] };
+                cgltf_accessor_read_float(output, 3*keyframe + 2, tmp, 3);
+                Vector3 tangent1 = { tmp[0], tmp[1], tmp[2] };
+                cgltf_accessor_read_float(output, 3*(keyframe + 1) + 1, tmp, 3);
+                Vector3 v2 = { tmp[0], tmp[1], tmp[2] };
+                cgltf_accessor_read_float(output, 3*(keyframe + 1), tmp, 3);
+                Vector3 tangent2 = { tmp[0], tmp[1], tmp[2] };
+                *(Vector3*)data = Vector3CubicHermite(v1, tangent1, v2, tangent2, t);
+            } break;
+            default: return false;
+        }
+    }
+    else if (output->type == cgltf_type_vec4)
+    {
+        switch (interpolationType)
+        {
+            case cgltf_interpolation_type_step:
+            {
+                float tmp[4] = { 0.0f };
+                cgltf_accessor_read_float(output, keyframe, tmp, 4);
+                *(Quaternion*)data = QuaternionNormalize((Quaternion){ tmp[0], tmp[1], tmp[2], tmp[3] });
+            } break;
+            case cgltf_interpolation_type_linear:
+            {
+                float tmp[4] = { 0.0f };
+                cgltf_accessor_read_float(output, keyframe, tmp, 4);
+                Quaternion v1 = QuaternionNormalize((Quaternion){ tmp[0], tmp[1], tmp[2], tmp[3] });
+                cgltf_accessor_read_float(output, keyframe + 1, tmp, 4);
+                Quaternion v2 = QuaternionNormalize((Quaternion){ tmp[0], tmp[1], tmp[2], tmp[3] });
+                *(Quaternion*)data = QuaternionNormalize(QuaternionSlerp(v1, v2, t));
+            } break;
+            case cgltf_interpolation_type_cubic_spline:
+            {
+                float tmp[4] = { 0.0f };
+                cgltf_accessor_read_float(output, 3*keyframe + 1, tmp, 4);
+                Quaternion v1 = QuaternionNormalize((Quaternion){ tmp[0], tmp[1], tmp[2], tmp[3] });
+                cgltf_accessor_read_float(output, 3*keyframe + 2, tmp, 4);
+                Vector4 outTangent1 = { tmp[0], tmp[1], tmp[2], 0.0f };
+                cgltf_accessor_read_float(output, 3*(keyframe + 1) + 1, tmp, 4);
+                Quaternion v2 = QuaternionNormalize((Quaternion){ tmp[0], tmp[1], tmp[2], tmp[3] });
+                cgltf_accessor_read_float(output, 3*(keyframe + 1), tmp, 4);
+                Vector4 inTangent2 = { tmp[0], tmp[1], tmp[2], 0.0f };
+
+                if (Vector4DotProduct(v1, v2) < 0.0f)
+                {
+                    v2 = Vector4Negate(v2);
+                }
+
+                outTangent1 = Vector4Scale(outTangent1, duration);
+                inTangent2 = Vector4Scale(inTangent2, duration);
+                *(Quaternion*)data = QuaternionNormalize(QuaternionCubicHermiteSpline(v1, outTangent1, v2, inTangent2, t));
+            } break;
+            default: return false;
+        }
+    }
+    else return false;
+
+    return true;
+}
+
 static bool GLBAnimationTargetsSkinJoint(const cgltf_skin* skin, const cgltf_node* node)
 {
     if (skin == NULL || node == NULL) return false;
@@ -1494,8 +1711,7 @@ static bool GLBDataLoadSourceTiming(GLBData* data, const char* filename)
     if (data->animCount <= 0) return true;
 
     cgltf_options options = { 0 };
-    cgltf_data* gltfData = NULL;
-    cgltf_result result = cgltf_parse_file(&options, filename, &gltfData);
+    cgltf_result result = cgltf_parse_file(&options, filename, &data->sourceData);
 
     if (result != cgltf_result_success)
     {
@@ -1503,20 +1719,47 @@ static bool GLBDataLoadSourceTiming(GLBData* data, const char* filename)
         return false;
     }
 
-    result = cgltf_load_buffers(&options, gltfData, filename);
+    result = cgltf_load_buffers(&options, data->sourceData, filename);
     if (result != cgltf_result_success)
     {
         printf("WARN: Failed to load GLB timing buffers for '%s'\n", filename);
-        cgltf_free(gltfData);
+        cgltf_free(data->sourceData);
+        data->sourceData = NULL;
         return false;
     }
 
-    const cgltf_skin* skin = (gltfData->skins_count > 0) ? &gltfData->skins[0] : NULL;
-    int parsedAnimCount = (data->animCount < (int)gltfData->animations_count) ? data->animCount : (int)gltfData->animations_count;
+    data->sourceSkin = (data->sourceData->skins_count > 0) ? &data->sourceData->skins[0] : NULL;
+
+    int boneCount = data->model.skeleton.boneCount;
+    for (int boneIdx = 0; boneIdx < boneCount; boneIdx++)
+    {
+        data->sourceRestPose[boneIdx] = (Transform){ { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f, 1.0f }, { 1.0f, 1.0f, 1.0f } };
+        data->sourceRootPose[boneIdx] = (Transform){ { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f, 1.0f }, { 1.0f, 1.0f, 1.0f } };
+
+        if (data->sourceSkin != NULL && boneIdx < (int)data->sourceSkin->joints_count)
+        {
+            const cgltf_node* node = data->sourceSkin->joints[boneIdx];
+            data->sourceRestPose[boneIdx] = GLBNodeLocalTransform(node);
+
+            if (data->model.skeleton.bones[boneIdx].parent == -1 && node != NULL && node->parent != NULL)
+            {
+                cgltf_float worldMatrix[16] = { 0 };
+                cgltf_node_transform_world(node->parent, worldMatrix);
+                MatrixDecompose(GLBMatrixFromCgltf(worldMatrix),
+                    &data->sourceRootPose[boneIdx].translation,
+                    &data->sourceRootPose[boneIdx].rotation,
+                    &data->sourceRootPose[boneIdx].scale);
+                data->sourceRootPose[boneIdx].rotation = QuaternionNormalize(data->sourceRootPose[boneIdx].rotation);
+            }
+        }
+    }
+
+    const cgltf_skin* skin = data->sourceSkin;
+    int parsedAnimCount = (data->animCount < (int)data->sourceData->animations_count) ? data->animCount : (int)data->sourceData->animations_count;
 
     for (int a = 0; a < parsedAnimCount; a++)
     {
-        cgltf_animation* anim = &gltfData->animations[a];
+        cgltf_animation* anim = &data->sourceData->animations[a];
         float duration = 0.0f;
         float minDelta = FLT_MAX;
         int maxInputCount = 0;
@@ -1575,9 +1818,9 @@ static bool GLBDataLoadSourceTiming(GLBData* data, const char* filename)
 
         data->sourceFrameCounts[a] = frameCount;
         data->sourceFrameTimes[a] = frameTime;
+        data->sourceDurations[a] = duration;
     }
 
-    cgltf_free(gltfData);
     return true;
 }
 
@@ -1652,8 +1895,16 @@ static bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int e
     data->frameTime = 1.0f / 60.0f; // raylib resamples GLTF at GLTF_FRAMERATE = 60 fps
     data->sourceFrameCounts = (int*)malloc(data->animCount * sizeof(int));
     data->sourceFrameTimes = (float*)malloc(data->animCount * sizeof(float));
+    data->sourceDurations = (float*)malloc(data->animCount * sizeof(float));
 
-    if (data->sourceFrameCounts == NULL || data->sourceFrameTimes == NULL)
+    int bc = data->model.skeleton.boneCount;
+    data->sourceRestPose = (Transform*)malloc(bc * sizeof(Transform));
+    data->sourceLocalPose = (Transform*)malloc(bc * sizeof(Transform));
+    data->sourceGlobalPose = (Transform*)malloc(bc * sizeof(Transform));
+    data->sourceRootPose = (Transform*)malloc(bc * sizeof(Transform));
+
+    if (data->sourceFrameCounts == NULL || data->sourceFrameTimes == NULL || data->sourceDurations == NULL ||
+        data->sourceRestPose == NULL || data->sourceLocalPose == NULL || data->sourceGlobalPose == NULL || data->sourceRootPose == NULL)
     {
         GLBDataFree(data);
         snprintf(errMsg, errMsgSize, "Error: Out of memory while loading animation timing for '%s'", filename);
@@ -1665,12 +1916,12 @@ static bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int e
     {
         data->sourceFrameCounts[a] = data->animations[a].keyframeCount;
         data->sourceFrameTimes[a] = data->frameTime;
+        data->sourceDurations[a] = (data->animations[a].keyframeCount - 1) * data->frameTime;
     }
 
     GLBDataLoadSourceTiming(data, filename);
 
     // Compute topological bone order (parent always before child)
-    int bc = data->model.skeleton.boneCount;
     data->topoOrder    = (int*)malloc(bc * sizeof(int));
     data->invTopoOrder = (int*)malloc(bc * sizeof(int));
     ComputeTopoOrder(bc, data->model.skeleton.bones, data->topoOrder, data->invTopoOrder);
@@ -1681,18 +1932,127 @@ static bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int e
     return true;
 }
 
-// Sample the current animation frame from GLB into TransformData.
-// raylib's GLTF loader stores currentPose/keyframePoses in GLOBAL (model) space
-// because LoadModelAnimations() applies BuildPoseFromParentJoints. We therefore
-// convert global -> local here in topological order, so the existing
-// TransformDataForwardKinematics() can re-derive correct globalPositions.
-// scale is applied to all local translations (e.g. 0.01 for cm -> m).
+static bool TransformDataSampleFrameGLBExact(
+    TransformData* data,
+    GLBData* glb,
+    float time,
+    float scale)
+{
+    if (glb->animCount == 0) return false;
+    if (glb->sourceData == NULL || glb->sourceSkin == NULL) return false;
+    if (glb->sourceRestPose == NULL || glb->sourceLocalPose == NULL || glb->sourceGlobalPose == NULL || glb->sourceRootPose == NULL) return false;
+    if (glb->topoOrder == NULL) return false;
+
+    int animIdx = glb->activeAnim;
+    if (animIdx < 0 || animIdx >= (int)glb->sourceData->animations_count) return false;
+
+    cgltf_animation* anim = &glb->sourceData->animations[animIdx];
+    float duration = GLBDataGetSourceDuration(glb, animIdx);
+    float timeClamped = Clamp(time, 0.0f, duration > 0.0f ? duration : time);
+
+    int boneCount = glb->model.skeleton.boneCount;
+    for (int boneIdx = 0; boneIdx < boneCount; boneIdx++)
+    {
+        glb->sourceLocalPose[boneIdx] = glb->sourceRestPose[boneIdx];
+    }
+
+    for (cgltf_size channelIdx = 0; channelIdx < anim->channels_count; channelIdx++)
+    {
+        cgltf_animation_channel* channel = &anim->channels[channelIdx];
+        if (channel->sampler == NULL) return false;
+
+        int boneIndex = GLBFindSkinJointIndex(glb->sourceSkin, channel->target_node);
+        if (boneIndex < 0 || boneIndex >= boneCount) continue;
+
+        switch (channel->target_path)
+        {
+            case cgltf_animation_path_type_translation:
+            {
+                if (!GLBGetPoseAtTime(channel->sampler->interpolation, channel->sampler->input, channel->sampler->output, timeClamped, &glb->sourceLocalPose[boneIndex].translation))
+                    return false;
+            } break;
+            case cgltf_animation_path_type_rotation:
+            {
+                if (!GLBGetPoseAtTime(channel->sampler->interpolation, channel->sampler->input, channel->sampler->output, timeClamped, &glb->sourceLocalPose[boneIndex].rotation))
+                    return false;
+                glb->sourceLocalPose[boneIndex].rotation = QuaternionNormalize(glb->sourceLocalPose[boneIndex].rotation);
+            } break;
+            case cgltf_animation_path_type_scale:
+            {
+                if (!GLBGetPoseAtTime(channel->sampler->interpolation, channel->sampler->input, channel->sampler->output, timeClamped, &glb->sourceLocalPose[boneIndex].scale))
+                    return false;
+            } break;
+            default: break;
+        }
+    }
+
+    for (int sortedIdx = 0; sortedIdx < boneCount; sortedIdx++)
+    {
+        int boneIdx = glb->topoOrder[sortedIdx];
+        int parentIdx = glb->model.skeleton.bones[boneIdx].parent;
+        Transform localPose = glb->sourceLocalPose[boneIdx];
+
+        if (parentIdx == -1)
+        {
+            Transform rootPose = glb->sourceRootPose[boneIdx];
+            glb->sourceGlobalPose[boneIdx].rotation = QuaternionNormalize(QuaternionMultiply(rootPose.rotation, localPose.rotation));
+            glb->sourceGlobalPose[boneIdx].scale = Vector3Multiply(localPose.scale, rootPose.scale);
+            glb->sourceGlobalPose[boneIdx].translation = Vector3Multiply(localPose.translation, rootPose.scale);
+            glb->sourceGlobalPose[boneIdx].translation = Vector3RotateByQuaternion(glb->sourceGlobalPose[boneIdx].translation, rootPose.rotation);
+            glb->sourceGlobalPose[boneIdx].translation = Vector3Add(glb->sourceGlobalPose[boneIdx].translation, rootPose.translation);
+        }
+        else
+        {
+            Transform parentPose = glb->sourceGlobalPose[parentIdx];
+            glb->sourceGlobalPose[boneIdx].rotation = QuaternionNormalize(QuaternionMultiply(parentPose.rotation, localPose.rotation));
+            glb->sourceGlobalPose[boneIdx].scale = Vector3Multiply(localPose.scale, parentPose.scale);
+            glb->sourceGlobalPose[boneIdx].translation = Vector3Multiply(localPose.translation, parentPose.scale);
+            glb->sourceGlobalPose[boneIdx].translation = Vector3RotateByQuaternion(glb->sourceGlobalPose[boneIdx].translation, parentPose.rotation);
+            glb->sourceGlobalPose[boneIdx].translation = Vector3Add(glb->sourceGlobalPose[boneIdx].translation, parentPose.translation);
+        }
+    }
+
+    int n = data->jointCount;
+    if (n > boneCount) n = boneCount;
+
+    for (int i = 0; i < n; i++)
+    {
+        int orig = glb->topoOrder[i];
+        Vector3 gPos = glb->sourceGlobalPose[orig].translation;
+        Quaternion gRot = glb->sourceGlobalPose[orig].rotation;
+        int parent = data->parents[i];
+
+        if (parent == -1)
+        {
+            data->localPositions[i] = Vector3Scale(gPos, scale);
+            data->localRotations[i] = gRot;
+        }
+        else
+        {
+            int origParent = glb->topoOrder[parent];
+            Vector3 pPos = glb->sourceGlobalPose[origParent].translation;
+            Quaternion pRot = glb->sourceGlobalPose[origParent].rotation;
+            Quaternion invPRot = QuaternionInvert(pRot);
+
+            Vector3 delta = Vector3Subtract(gPos, pPos);
+            data->localPositions[i] = Vector3Scale(Vector3RotateByQuaternion(delta, invPRot), scale);
+            data->localRotations[i] = QuaternionNormalize(QuaternionMultiply(invPRot, gRot));
+        }
+    }
+
+    return true;
+}
+
+// Sample the current animation time from GLB into TransformData.
+// Prefer exact glTF channel sampling; fall back to raylib's 60 fps sampled poses.
 static void TransformDataSampleFrameGLB(
     TransformData* data,
     GLBData* glb,
-    float frame,
+    float time,
     float scale)
 {
+    if (TransformDataSampleFrameGLBExact(data, glb, time, scale)) return;
+
     if (glb->animCount == 0) { return; }
     if (glb->model.currentPose == NULL) { return; }
     if (glb->model.boneMatrices == NULL) { return; }
@@ -1700,6 +2060,7 @@ static void TransformDataSampleFrameGLB(
 
     int animIdx = glb->activeAnim;
     ModelAnimation anim = glb->animations[animIdx];
+    float frame = time / glb->frameTime;
 
     // Clamp to valid range while keeping fractional part for raylib's built-in lerp
     float frameClamped = frame;
@@ -4429,13 +4790,11 @@ static void ApplicationUpdate(void* voidApplicationState)
     {
         if (app->characterData.isGLB[i])
         {
-            // GLB animation: sample from model pose
-            float frame = app->scrubberSettings.playTime /
-                app->characterData.glbData[i].frameTime;
+            // GLB animation: sample directly from animation time
             TransformDataSampleFrameGLB(
                 &app->characterData.xformData[i],
                 &app->characterData.glbData[i],
-                frame,
+                app->scrubberSettings.playTime,
                 app->characterData.scales[i]);
         }
         else if (app->scrubberSettings.sampleMode == 0)
