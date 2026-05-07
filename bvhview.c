@@ -5724,8 +5724,8 @@ int main(int argc, char** argv)
     ApplicationState app;
     app.argc = argc;
     app.argv = argv;    
-    app.screenWidth = ArgInt(argc, argv, "screenWidth", 1280);
-    app.screenHeight = ArgInt(argc, argv, "screenHeight", 720);
+    app.screenWidth = ArgInt(argc, argv, "screenWidth", 1920);
+    app.screenHeight = ArgInt(argc, argv, "screenHeight", 1080);
     
     // Init Window
 
