@@ -2484,6 +2484,9 @@ typedef struct {
 
     // If the color picker is active
     bool colorPickerActive;
+
+    // True if any loaded character has a skinned mesh
+    bool hasSkinnedMesh;
     
     // GLB-specific data
     bool isGLB[CHARACTERS_MAX];
@@ -2530,6 +2533,7 @@ static inline void CharacterDataInit(CharacterData* data, int argc, char** argv)
     }
 
     data->colorPickerActive = ArgBool(argc, argv, "colorPickerActive", false);
+    data->hasSkinnedMesh = false;
 }
 
 static inline void CharacterDataFree(CharacterData* data)
@@ -2649,6 +2653,13 @@ static bool CharacterDataLoadFromFile(
         TransformDataForwardKinematics(&data->xformData[data->count]);
 
         data->count++;
+
+        // Auto-toggle: skinned mesh loaded -> draw mesh, not capsules
+        if (glb->model.meshCount > 0)
+        {
+            data->hasSkinnedMesh = true;
+        }
+
         return true;
     }
     else
@@ -4433,8 +4444,8 @@ void RenderSettingsInit(RenderSettings* settings, int argc, char** argv)
     settings->drawOrigin = ArgBool(argc, argv, "drawOrigin", true);
     settings->drawGrid = ArgBool(argc, argv, "drawGrid", false);
     settings->drawChecker = ArgBool(argc, argv, "drawChecker", true);
-    settings->drawMeshes = ArgBool(argc, argv, "drawMeshes", true);
-    settings->drawCapsules = ArgBool(argc, argv, "drawCapsules", !settings->drawMeshes);
+    settings->drawMeshes = ArgBool(argc, argv, "drawMeshes", false);
+    settings->drawCapsules = ArgBool(argc, argv, "drawCapsules", true);
     settings->drawWireframes = ArgBool(argc, argv, "drawWireframes", false);
     settings->drawSkeleton = ArgBool(argc, argv, "drawSkeleton", true);
     settings->drawTransforms = ArgBool(argc, argv, "drawTransforms", false);
@@ -5039,10 +5050,17 @@ static void ApplicationUpdate(void* voidApplicationState)
             {
                 app->characterData.active = app->characterData.count - 1;
 
+                // Auto-toggle render mode if a skinned mesh was loaded
+                if (app->characterData.hasSkinnedMesh)
+                {
+                    app->renderSettings.drawMeshes = true;
+                    app->renderSettings.drawCapsules = false;
+                }
+
                 CapsuleDataUpdateForCharacters(&app->capsuleData, &app->characterData);
                 ScrubberSettingsRecomputeLimits(&app->scrubberSettings, &app->characterData);
                 ScrubberSettingsInitMaxs(&app->scrubberSettings, &app->characterData);
-                
+
                 char windowTitle[528];
                 snprintf(windowTitle, sizeof(windowTitle), "%s - BVHView", app->characterData.filePaths[app->characterData.active]);
                 SetWindowTitle(windowTitle);
@@ -5076,6 +5094,13 @@ static void ApplicationUpdate(void* voidApplicationState)
 
         if (app->characterData.count > prevBvhCount)
         {
+            // Auto-toggle render mode if a skinned mesh was loaded
+            if (app->characterData.hasSkinnedMesh)
+            {
+                app->renderSettings.drawMeshes = true;
+                app->renderSettings.drawCapsules = false;
+            }
+
             CapsuleDataUpdateForCharacters(&app->capsuleData, &app->characterData);
             ScrubberSettingsRecomputeLimits(&app->scrubberSettings, &app->characterData);
             ScrubberSettingsInitMaxs(&app->scrubberSettings, &app->characterData);
