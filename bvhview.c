@@ -34,6 +34,22 @@
 #include "raymath.h"
 #include "rlgl.h"
 #include "build/raylib/raylib/src/external/cgltf.h"
+
+// Private stb_image with full JPEG/PNG/BMP/GIF/PSD/HDR support.
+// raylib's libraylib.a compiles stb_image with STBI_NO_JPEG (SUPPORT_FILEFORMAT_JPG=0),
+// so we need our own copy to decode embedded JPEG textures from glTF/GLB.
+// STB_IMAGE_STATIC gives the symbols internal linkage, avoiding collisions with libraylib.
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#endif
+#define STB_IMAGE_STATIC
+#define STB_IMAGE_IMPLEMENTATION
+#include "build/raylib/raylib/src/external/stb_image.h"
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
 #define RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT 24
 #define GUI_WINDOW_FILE_DIALOG_IMPLEMENTATION
 #include "../examples/custom_file_dialog/gui_window_file_dialog.h"
@@ -2146,6 +2162,69 @@ static bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int e
     GLBDataLoadSourceTiming(data, filename);
     GLBDataUndoSkinnedMeshNodeTransforms(data);
 
+    // Reload any textures that raylib failed to decode (raylib's libraylib.a was
+    // compiled with SUPPORT_FILEFORMAT_JPG=0). Use our own stb_image which has
+    // full JPEG/PNG/BMP/GIF/PSD/HDR support.
+    {
+        unsigned int defaultTexId = rlGetTextureIdDefault();
+        for (int matIdx = 0; matIdx < data->model.materialCount; matIdx++)
+        {
+            Texture2D tex = data->model.materials[matIdx].maps[MATERIAL_MAP_ALBEDO].texture;
+            bool alreadyLoaded = (tex.id > 0 && tex.id != defaultTexId && (tex.width > 1 || tex.height > 1));
+            if (alreadyLoaded) continue;
+
+            // Find the matching cgltf material (raylib material index = cgltf index + 1)
+            if (data->sourceData == NULL) continue;
+            int cgltfIdx = matIdx - 1;
+            if (cgltfIdx < 0 || cgltfIdx >= (int)data->sourceData->materials_count) continue;
+
+            cgltf_material* cgltfMat = &data->sourceData->materials[cgltfIdx];
+            if (!cgltfMat->has_pbr_metallic_roughness) continue;
+
+            cgltf_texture* cgltfTex = cgltfMat->pbr_metallic_roughness.base_color_texture.texture;
+            if (cgltfTex == NULL || cgltfTex->image == NULL) continue;
+
+            cgltf_image* cgltfImg = cgltfTex->image;
+
+            // Re-read the image buffer by copying it respecting buffer_view stride
+            if (cgltfImg->buffer_view == NULL || cgltfImg->buffer_view->buffer->data == NULL) continue;
+
+            cgltf_buffer_view* bv = cgltfImg->buffer_view;
+            int imgSize = (int)bv->size;
+            if (imgSize <= 0) continue;
+
+            unsigned char* imgData = (unsigned char*)malloc(imgSize);
+            if (imgData == NULL) continue;
+
+            int offset = (int)bv->offset;
+            int stride = (int)(bv->stride ? bv->stride : 1);
+            unsigned char* src = (unsigned char*)bv->buffer->data;
+            for (int k = 0; k < imgSize; k++)
+            {
+                imgData[k] = src[offset];
+                offset += stride;
+            }
+
+            int w, h, comp;
+            unsigned char* pixels = stbi_load_from_memory(imgData, imgSize, &w, &h, &comp, 4);
+            free(imgData);
+
+            if (pixels != NULL)
+            {
+                Image img = { 0 };
+                img.data = pixels;
+                img.width = w;
+                img.height = h;
+                img.mipmaps = 1;
+                img.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+                Texture2D newTex = LoadTextureFromImage(img);
+                stbi_image_free(pixels);
+                data->model.materials[matIdx].maps[MATERIAL_MAP_ALBEDO].texture = newTex;
+                printf("INFO: Reloaded GLB texture (material %d) via stb_image: %dx%d\n", matIdx, w, h);
+            }
+        }
+    }
+
     // Compute topological bone order (parent always before child)
     data->topoOrder    = (int*)malloc(bc * sizeof(int));
     data->invTopoOrder = (int*)malloc(bc * sizeof(int));
@@ -3745,6 +3824,9 @@ uniform float objectSpecularity;
 uniform float objectGlossiness;
 uniform float objectOpacity;
 
+uniform sampler2D texture0;
+uniform int useTexture;
+
 uniform int isCapsule;
 uniform vec3 capsulePosition;
 uniform vec4 capsuleRotation;
@@ -3978,13 +4060,16 @@ void main()
             aoCapsuleRadii[i]));
     }
 
-    // Compute albedo from grid and checker
+    // Compute albedo: sample texture if available, otherwise use grid/checker pattern
+
+    vec3 texColor = texture(texture0, uvs).rgb;
 
     float gridFine = Grid(20.0 * uvs, 0.025);
     float gridCoarse = Grid(2.0 * uvs, 0.02);
     float check = Checker(2.0 * uvs);
 
-    vec3 albedo = FromGamma(objectColor) * mix(mix(mix(0.9, 0.95, check), 0.85, gridFine), 1.0, gridCoarse);
+    vec3 proceduralColor = FromGamma(objectColor) * mix(mix(mix(0.9, 0.95, check), 0.85, gridFine), 1.0, gridCoarse);
+    vec3 albedo = mix(proceduralColor, FromGamma(objectColor) * texColor, float(useTexture));
     float specularity = objectSpecularity * mix(mix(0.0, 0.75, check), 1.0, gridCoarse);
     
     // Compute lighting
@@ -4058,6 +4143,7 @@ typedef struct
     int objectSpecularity;
     int objectGlossiness;
     int objectOpacity;
+    int useTexture;
 
     int sunStrength;
     int sunDir;
@@ -4102,6 +4188,7 @@ static void ShaderUniformsInit(ShaderUniforms* uniforms, Shader shader)
     uniforms->objectSpecularity = GetShaderLocation(shader, "objectSpecularity");
     uniforms->objectGlossiness = GetShaderLocation(shader, "objectGlossiness");
     uniforms->objectOpacity = GetShaderLocation(shader, "objectOpacity");
+    uniforms->useTexture = GetShaderLocation(shader, "useTexture");
 
     uniforms->sunStrength = GetShaderLocation(shader, "sunStrength");
     uniforms->sunDir = GetShaderLocation(shader, "sunDir");
@@ -4318,6 +4405,7 @@ typedef struct {
     bool drawShadows;
     bool drawEndSites;
     bool drawFPS;
+    bool drawTexture;
     bool drawUI;
 
 } RenderSettings;
@@ -4352,6 +4440,7 @@ void RenderSettingsInit(RenderSettings* settings, int argc, char** argv)
     settings->drawShadows = ArgBool(argc, argv, "drawShadows", true);
     settings->drawEndSites = ArgBool(argc, argv, "drawEndSites", true);
     settings->drawFPS = ArgBool(argc, argv, "drawFPS", false);
+    settings->drawTexture = ArgBool(argc, argv, "drawTexture", true);
     settings->drawUI = ArgBool(argc, argv, "drawUI", true);
 }
 
@@ -4585,7 +4674,7 @@ static inline void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterD
 
 static inline void GuiRenderSettings(RenderSettings* settings, CapsuleData* capsuleData, int screenWidth, int screenHeight)
 {
-    GuiGroupBox((Rectangle){ screenWidth - 260, 10, 240, 430 }, "Rendering");
+    GuiGroupBox((Rectangle){ screenWidth - 260, 10, 240, 470 }, "Rendering");
 
     GuiSliderBar(
         (Rectangle){ screenWidth - 160, 20, 100, 20 },
@@ -4661,7 +4750,8 @@ static inline void GuiRenderSettings(RenderSettings* settings, CapsuleData* caps
     GuiCheckBox((Rectangle){ screenWidth - 130, 380, 20, 20 }, "Draw Shadows", &settings->drawShadows);
     GuiCheckBox((Rectangle){ screenWidth - 250, 410, 20, 20 }, "Draw End Sites", &settings->drawEndSites);
     GuiCheckBox((Rectangle){ screenWidth - 130, 410, 20, 20 }, "Draw FPS", &settings->drawFPS);
-    GuiLabel((Rectangle){ screenWidth - 130, 410, 100, 20 }, "H Key - Hide UI");
+    GuiCheckBox((Rectangle){ screenWidth - 250, 440, 20, 20 }, "Draw Texture", &settings->drawTexture);
+    GuiLabel((Rectangle){ screenWidth - 130, 440, 100, 20 }, "H Key - Hide UI");
 }
 
 static inline void GuiCharacterData(
@@ -4716,8 +4806,8 @@ static inline void GuiCharacterData(
             characterData->active = i;
             ScrubberSettingsClamp(scrubberSettings, characterData);
             
-            char windowTitle[512];
-            snprintf(windowTitle, 512, "%s - BVHView", characterData->filePaths[characterData->active]);
+            char windowTitle[528];
+            snprintf(windowTitle, sizeof(windowTitle), "%s - BVHView", characterData->filePaths[characterData->active]);
             SetWindowTitle(windowTitle);
         }
 
@@ -4940,8 +5030,8 @@ static void ApplicationUpdate(void* voidApplicationState)
             IsFileExtension(app->fileDialogState.fileNameText, ".glb") ||
             IsFileExtension(app->fileDialogState.fileNameText, ".gltf"))
         {
-            char fileNameToLoad[512];
-            snprintf(fileNameToLoad, 512, "%s/%s", app->fileDialogState.dirPathText, app->fileDialogState.fileNameText);
+            char fileNameToLoad[2048];
+            snprintf(fileNameToLoad, sizeof(fileNameToLoad), "%s/%s", app->fileDialogState.dirPathText, app->fileDialogState.fileNameText);
 
             if (CharacterDataLoadFromFile(&app->characterData, fileNameToLoad, app->errMsg, 512))
             {
@@ -4951,14 +5041,14 @@ static void ApplicationUpdate(void* voidApplicationState)
                 ScrubberSettingsRecomputeLimits(&app->scrubberSettings, &app->characterData);
                 ScrubberSettingsInitMaxs(&app->scrubberSettings, &app->characterData);
                 
-                char windowTitle[512];
-                snprintf(windowTitle, 512, "%s - BVHView", app->characterData.filePaths[app->characterData.active]);
+                char windowTitle[528];
+                snprintf(windowTitle, sizeof(windowTitle), "%s - BVHView", app->characterData.filePaths[app->characterData.active]);
                 SetWindowTitle(windowTitle);
             }
         }
         else
         {
-            snprintf(app->errMsg, 512, "Error: File '%s' is not a supported animation file (.bvh, .glb, .gltf).", app->fileDialogState.fileNameText);
+            snprintf(app->errMsg, 512, "Error: File '%.*s' is not a supported animation file (.bvh, .glb, .gltf).", 400, app->fileDialogState.fileNameText);
         }
 
         app->fileDialogState.SelectFilePressed = false;
@@ -4988,8 +5078,8 @@ static void ApplicationUpdate(void* voidApplicationState)
             ScrubberSettingsRecomputeLimits(&app->scrubberSettings, &app->characterData);
             ScrubberSettingsInitMaxs(&app->scrubberSettings, &app->characterData);
 
-            char windowTitle[512];
-            snprintf(windowTitle, 512, "%s - BVHView", app->characterData.filePaths[app->characterData.active]);
+            char windowTitle[528];
+            snprintf(windowTitle, sizeof(windowTitle), "%s - BVHView", app->characterData.filePaths[app->characterData.active]);
             SetWindowTitle(windowTitle);
         }
     }
@@ -5189,9 +5279,11 @@ static void ApplicationUpdate(void* voidApplicationState)
     if (app->renderSettings.drawChecker)
     {
         int groundIsCapsule = 0;
+        int groundUseTexture = 0;
         Vector3 groundColor = { 0.75f, 0.75f, 0.75f };
 
         SetShaderValue(app->shader, app->uniforms.isCapsule, &groundIsCapsule, SHADER_UNIFORM_INT);
+        SetShaderValue(app->shader, app->uniforms.useTexture, &groundUseTexture, SHADER_UNIFORM_INT);
         SetShaderValue(app->shader, app->uniforms.objectColor, &groundColor, SHADER_UNIFORM_VEC3);
 
         // Draw ground in a grid of 10x10, 2 meter wide segments.
@@ -5300,6 +5392,23 @@ static void ApplicationUpdate(void* voidApplicationState)
             SetShaderValue(app->shader, app->uniforms.objectColor, &meshColor, SHADER_UNIFORM_VEC3);
             SetShaderValue(app->shader, app->uniforms.objectOpacity, &meshOpacity, SHADER_UNIFORM_FLOAT);
 
+            // Detect if any material has a real albedo texture (id > 0, not the default 1x1 white pixel)
+            int modelHasTexture = 0;
+            if (app->renderSettings.drawTexture)
+            {
+                unsigned int defaultTexId = rlGetTextureIdDefault();
+                for (int materialIndex = 0; materialIndex < drawModel.materialCount; materialIndex++)
+                {
+                    Texture2D tex = drawModel.materials[materialIndex].maps[MATERIAL_MAP_ALBEDO].texture;
+                    if (tex.id > 0 && tex.id != defaultTexId && (tex.width > 1 || tex.height > 1))
+                    {
+                        modelHasTexture = 1;
+                        break;
+                    }
+                }
+            }
+            SetShaderValue(app->shader, app->uniforms.useTexture, &modelHasTexture, SHADER_UNIFORM_INT);
+
             if (meshOpacity < 1.0f)
             {
                 rlDrawRenderBatchActive();
@@ -5335,7 +5444,9 @@ static void ApplicationUpdate(void* voidApplicationState)
         // Render
 
         int capsuleIsCapsule = 1;
+        int capsuleUseTexture = 0;
         SetShaderValue(app->shader, app->uniforms.isCapsule, &capsuleIsCapsule, SHADER_UNIFORM_INT);
+        SetShaderValue(app->shader, app->uniforms.useTexture, &capsuleUseTexture, SHADER_UNIFORM_INT);
 
         for (int i = 0; i < app->capsuleData.capsuleCount; i++)
         {
@@ -5658,8 +5769,8 @@ int main(int argc, char** argv)
         ScrubberSettingsRecomputeLimits(&app.scrubberSettings, &app.characterData);
         ScrubberSettingsInitMaxs(&app.scrubberSettings, &app.characterData);
         
-        char windowTitle[512];
-        snprintf(windowTitle, 512, "%s - BVHView", app.characterData.filePaths[app.characterData.active]);
+        char windowTitle[528];
+        snprintf(windowTitle, sizeof(windowTitle), "%s - BVHView", app.characterData.filePaths[app.characterData.active]);
         SetWindowTitle(windowTitle);
     }
 
