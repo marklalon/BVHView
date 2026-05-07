@@ -4075,14 +4075,14 @@ void main()
 
     // Compute albedo: sample texture if available, otherwise use grid/checker pattern
 
-    vec3 texColor = texture(texture0, uvs).rgb;
+    vec3 texColor = FromGamma(texture(texture0, uvs).rgb);
 
     float gridFine = Grid(20.0 * uvs, 0.025);
     float gridCoarse = Grid(2.0 * uvs, 0.02);
     float check = Checker(2.0 * uvs);
 
     vec3 proceduralColor = FromGamma(objectColor) * mix(mix(mix(0.9, 0.95, check), 0.85, gridFine), 1.0, gridCoarse);
-    vec3 albedo = mix(proceduralColor, FromGamma(objectColor) * texColor, float(useTexture));
+    vec3 albedo = mix(proceduralColor, texColor, float(useTexture));
     float specularity = objectSpecularity * mix(mix(0.0, 0.75, check), 1.0, gridCoarse);
     
     // Compute lighting
