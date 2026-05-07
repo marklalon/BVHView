@@ -1598,8 +1598,10 @@ static void GLBDataUpdateModelAnimationVertexBuffers(Model model)
 
         if (bufferUpdateRequired)
         {
-            rlUpdateVertexBuffer(mesh->vboId[SHADER_LOC_VERTEX_POSITION], mesh->animVertices, mesh->vertexCount * 3 * sizeof(float), 0);
-            if (mesh->normals != NULL) rlUpdateVertexBuffer(mesh->vboId[SHADER_LOC_VERTEX_NORMAL], mesh->animNormals, mesh->vertexCount * 3 * sizeof(float), 0);
+            // NOTE: mesh->vboId is indexed by RL_DEFAULT_SHADER_ATTRIB_LOCATION_* (position=0, texcoord=1, normal=2, color=3, tangent=4),
+            // not by SHADER_LOC_VERTEX_* (which has TEXCOORD02 at slot 2 and shifts NORMAL to slot 3 — that would target the color VBO).
+            rlUpdateVertexBuffer(mesh->vboId[RL_DEFAULT_SHADER_ATTRIB_LOCATION_POSITION], mesh->animVertices, mesh->vertexCount * 3 * sizeof(float), 0);
+            if (mesh->normals != NULL) rlUpdateVertexBuffer(mesh->vboId[RL_DEFAULT_SHADER_ATTRIB_LOCATION_NORMAL], mesh->animNormals, mesh->vertexCount * 3 * sizeof(float), 0);
         }
     }
 }
@@ -1650,9 +1652,9 @@ static void GLBMeshUndoWorldTransform(Mesh* mesh, Matrix inverseWorldMatrix, Mat
             mesh->vertices[base + 2] = vertex.z;
         }
 
-        if (mesh->vboId != NULL && mesh->vboId[SHADER_LOC_VERTEX_POSITION] != 0)
+        if (mesh->vboId != NULL && mesh->vboId[RL_DEFAULT_SHADER_ATTRIB_LOCATION_POSITION] != 0)
         {
-            rlUpdateVertexBuffer(mesh->vboId[SHADER_LOC_VERTEX_POSITION], mesh->vertices, mesh->vertexCount * 3 * sizeof(float), 0);
+            rlUpdateVertexBuffer(mesh->vboId[RL_DEFAULT_SHADER_ATTRIB_LOCATION_POSITION], mesh->vertices, mesh->vertexCount * 3 * sizeof(float), 0);
         }
     }
 
@@ -1668,9 +1670,9 @@ static void GLBMeshUndoWorldTransform(Mesh* mesh, Matrix inverseWorldMatrix, Mat
             mesh->normals[base + 2] = normal.z;
         }
 
-        if (mesh->vboId != NULL && mesh->vboId[SHADER_LOC_VERTEX_NORMAL] != 0)
+        if (mesh->vboId != NULL && mesh->vboId[RL_DEFAULT_SHADER_ATTRIB_LOCATION_NORMAL] != 0)
         {
-            rlUpdateVertexBuffer(mesh->vboId[SHADER_LOC_VERTEX_NORMAL], mesh->normals, mesh->vertexCount * 3 * sizeof(float), 0);
+            rlUpdateVertexBuffer(mesh->vboId[RL_DEFAULT_SHADER_ATTRIB_LOCATION_NORMAL], mesh->normals, mesh->vertexCount * 3 * sizeof(float), 0);
         }
     }
 
@@ -1686,9 +1688,9 @@ static void GLBMeshUndoWorldTransform(Mesh* mesh, Matrix inverseWorldMatrix, Mat
             mesh->tangents[base + 2] = tangent.z;
         }
 
-        if (mesh->vboId != NULL && mesh->vboId[SHADER_LOC_VERTEX_TANGENT] != 0)
+        if (mesh->vboId != NULL && mesh->vboId[RL_DEFAULT_SHADER_ATTRIB_LOCATION_TANGENT] != 0)
         {
-            rlUpdateVertexBuffer(mesh->vboId[SHADER_LOC_VERTEX_TANGENT], mesh->tangents, mesh->vertexCount * 4 * sizeof(float), 0);
+            rlUpdateVertexBuffer(mesh->vboId[RL_DEFAULT_SHADER_ATTRIB_LOCATION_TANGENT], mesh->tangents, mesh->vertexCount * 4 * sizeof(float), 0);
         }
     }
 
