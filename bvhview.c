@@ -1526,6 +1526,230 @@ static Matrix GLBMatrixFromCgltf(const cgltf_float* m)
     };
 }
 
+static Matrix GLBTransformToMatrix(Transform transform)
+{
+    return MatrixMultiply(
+        MatrixMultiply(MatrixScale(transform.scale.x, transform.scale.y, transform.scale.z),
+            QuaternionToMatrix(transform.rotation)),
+        MatrixTranslate(transform.translation.x, transform.translation.y, transform.translation.z));
+}
+
+static void GLBDataUpdateModelAnimationVertexBuffers(Model model)
+{
+    for (int meshIndex = 0; meshIndex < model.meshCount; meshIndex++)
+    {
+        Mesh* mesh = &model.meshes[meshIndex];
+        if (mesh->boneWeights == NULL || mesh->boneIndices == NULL || mesh->animVertices == NULL || mesh->animNormals == NULL) continue;
+
+        bool bufferUpdateRequired = false;
+        int boneCounter = 0;
+        int vertexValuesCount = mesh->vertexCount * 3;
+
+        for (int vertexIndex = 0; vertexIndex < vertexValuesCount; vertexIndex += 3)
+        {
+            mesh->animVertices[vertexIndex + 0] = 0.0f;
+            mesh->animVertices[vertexIndex + 1] = 0.0f;
+            mesh->animVertices[vertexIndex + 2] = 0.0f;
+            mesh->animNormals[vertexIndex + 0] = 0.0f;
+            mesh->animNormals[vertexIndex + 1] = 0.0f;
+            mesh->animNormals[vertexIndex + 2] = 0.0f;
+
+            for (int weightIndex = 0; weightIndex < 4; weightIndex++, boneCounter++)
+            {
+                float boneWeight = mesh->boneWeights[boneCounter];
+                int boneIndex = mesh->boneIndices[boneCounter];
+
+                if (boneWeight == 0.0f) continue;
+                if (boneIndex < 0 || boneIndex >= model.skeleton.boneCount) continue;
+
+                Vector3 animVertex = { mesh->vertices[vertexIndex], mesh->vertices[vertexIndex + 1], mesh->vertices[vertexIndex + 2] };
+                animVertex = Vector3Transform(animVertex, model.boneMatrices[boneIndex]);
+                mesh->animVertices[vertexIndex + 0] += animVertex.x * boneWeight;
+                mesh->animVertices[vertexIndex + 1] += animVertex.y * boneWeight;
+                mesh->animVertices[vertexIndex + 2] += animVertex.z * boneWeight;
+                bufferUpdateRequired = true;
+
+                if (mesh->normals != NULL)
+                {
+                    Vector3 animNormal = { mesh->normals[vertexIndex], mesh->normals[vertexIndex + 1], mesh->normals[vertexIndex + 2] };
+                    animNormal = Vector3Transform(animNormal, MatrixTranspose(MatrixInvert(model.boneMatrices[boneIndex])));
+                    mesh->animNormals[vertexIndex + 0] += animNormal.x * boneWeight;
+                    mesh->animNormals[vertexIndex + 1] += animNormal.y * boneWeight;
+                    mesh->animNormals[vertexIndex + 2] += animNormal.z * boneWeight;
+                }
+            }
+        }
+
+        if (bufferUpdateRequired)
+        {
+            rlUpdateVertexBuffer(mesh->vboId[SHADER_LOC_VERTEX_POSITION], mesh->animVertices, mesh->vertexCount * 3 * sizeof(float), 0);
+            if (mesh->normals != NULL) rlUpdateVertexBuffer(mesh->vboId[SHADER_LOC_VERTEX_NORMAL], mesh->animNormals, mesh->vertexCount * 3 * sizeof(float), 0);
+        }
+    }
+}
+
+static void GLBDataUpdateModelPose(GLBData* glb, const Transform* globalPose)
+{
+    if (glb->model.currentPose == NULL || glb->model.boneMatrices == NULL || glb->model.skeleton.bindPose == NULL) return;
+
+    int boneCount = glb->model.skeleton.boneCount;
+    for (int boneIndex = 0; boneIndex < boneCount; boneIndex++)
+    {
+        glb->model.currentPose[boneIndex] = globalPose[boneIndex];
+
+        Matrix bindPoseMatrix = GLBTransformToMatrix(glb->model.skeleton.bindPose[boneIndex]);
+        Matrix currentPoseMatrix = GLBTransformToMatrix(glb->model.currentPose[boneIndex]);
+        glb->model.boneMatrices[boneIndex] = MatrixMultiply(MatrixInvert(bindPoseMatrix), currentPoseMatrix);
+    }
+
+    GLBDataUpdateModelAnimationVertexBuffers(glb->model);
+}
+
+static float GLBMatrixMaxAbsDiff(Matrix a, Matrix b)
+{
+    const float* pa = (const float*)&a;
+    const float* pb = (const float*)&b;
+    float maxDiff = 0.0f;
+
+    for (int i = 0; i < 16; i++)
+    {
+        float diff = fabsf(pa[i] - pb[i]);
+        if (diff > maxDiff) maxDiff = diff;
+    }
+
+    return maxDiff;
+}
+
+static void GLBMeshUndoWorldTransform(Mesh* mesh, Matrix inverseWorldMatrix, Matrix inverseWorldNormalMatrix)
+{
+    if (mesh->vertices != NULL)
+    {
+        for (int vertexIndex = 0; vertexIndex < mesh->vertexCount; vertexIndex++)
+        {
+            int base = vertexIndex * 3;
+            Vector3 vertex = { mesh->vertices[base + 0], mesh->vertices[base + 1], mesh->vertices[base + 2] };
+            vertex = Vector3Transform(vertex, inverseWorldMatrix);
+            mesh->vertices[base + 0] = vertex.x;
+            mesh->vertices[base + 1] = vertex.y;
+            mesh->vertices[base + 2] = vertex.z;
+        }
+
+        if (mesh->vboId != NULL && mesh->vboId[SHADER_LOC_VERTEX_POSITION] != 0)
+        {
+            rlUpdateVertexBuffer(mesh->vboId[SHADER_LOC_VERTEX_POSITION], mesh->vertices, mesh->vertexCount * 3 * sizeof(float), 0);
+        }
+    }
+
+    if (mesh->normals != NULL)
+    {
+        for (int normalIndex = 0; normalIndex < mesh->vertexCount; normalIndex++)
+        {
+            int base = normalIndex * 3;
+            Vector3 normal = { mesh->normals[base + 0], mesh->normals[base + 1], mesh->normals[base + 2] };
+            normal = Vector3Normalize(Vector3Transform(normal, inverseWorldNormalMatrix));
+            mesh->normals[base + 0] = normal.x;
+            mesh->normals[base + 1] = normal.y;
+            mesh->normals[base + 2] = normal.z;
+        }
+
+        if (mesh->vboId != NULL && mesh->vboId[SHADER_LOC_VERTEX_NORMAL] != 0)
+        {
+            rlUpdateVertexBuffer(mesh->vboId[SHADER_LOC_VERTEX_NORMAL], mesh->normals, mesh->vertexCount * 3 * sizeof(float), 0);
+        }
+    }
+
+    if (mesh->tangents != NULL)
+    {
+        for (int tangentIndex = 0; tangentIndex < mesh->vertexCount; tangentIndex++)
+        {
+            int base = tangentIndex * 4;
+            Vector3 tangent = { mesh->tangents[base + 0], mesh->tangents[base + 1], mesh->tangents[base + 2] };
+            tangent = Vector3Normalize(Vector3Transform(tangent, inverseWorldMatrix));
+            mesh->tangents[base + 0] = tangent.x;
+            mesh->tangents[base + 1] = tangent.y;
+            mesh->tangents[base + 2] = tangent.z;
+        }
+
+        if (mesh->vboId != NULL && mesh->vboId[SHADER_LOC_VERTEX_TANGENT] != 0)
+        {
+            rlUpdateVertexBuffer(mesh->vboId[SHADER_LOC_VERTEX_TANGENT], mesh->tangents, mesh->vertexCount * 4 * sizeof(float), 0);
+        }
+    }
+
+    if (mesh->animVertices != NULL && mesh->vertices != NULL)
+    {
+        memcpy(mesh->animVertices, mesh->vertices, mesh->vertexCount * 3 * sizeof(float));
+    }
+
+    if (mesh->animNormals != NULL && mesh->normals != NULL)
+    {
+        memcpy(mesh->animNormals, mesh->normals, mesh->vertexCount * 3 * sizeof(float));
+    }
+}
+
+static void GLBDataUndoSkinnedMeshNodeTransforms(GLBData* data)
+{
+    if (data->sourceData == NULL || data->model.meshes == NULL) return;
+
+    int meshIndex = 0;
+    int correctedMeshCount = 0;
+
+    for (cgltf_size nodeIndex = 0; nodeIndex < data->sourceData->nodes_count; nodeIndex++)
+    {
+        cgltf_node* node = &data->sourceData->nodes[nodeIndex];
+        if (node->mesh == NULL) continue;
+
+        cgltf_float worldTransform[16] = { 0 };
+        cgltf_node_transform_world(node, worldTransform);
+        Matrix worldMatrix = GLBMatrixFromCgltf(worldTransform);
+        Matrix worldNormalMatrix = MatrixTranspose(MatrixInvert(worldMatrix));
+
+        bool shouldUndoTransform = (node->skin != NULL) && (GLBMatrixMaxAbsDiff(worldMatrix, MatrixIdentity()) > 1e-6f);
+        Matrix inverseWorldMatrix = shouldUndoTransform ? MatrixInvert(worldMatrix) : MatrixIdentity();
+        Matrix inverseWorldNormalMatrix = shouldUndoTransform ? MatrixInvert(worldNormalMatrix) : MatrixIdentity();
+
+        for (cgltf_size primitiveIndex = 0; primitiveIndex < node->mesh->primitives_count; primitiveIndex++)
+        {
+            if (node->mesh->primitives[primitiveIndex].type != cgltf_primitive_type_triangles) continue;
+            if (meshIndex >= data->model.meshCount) return;
+
+            if (shouldUndoTransform)
+            {
+                GLBMeshUndoWorldTransform(&data->model.meshes[meshIndex], inverseWorldMatrix, inverseWorldNormalMatrix);
+                correctedMeshCount++;
+            }
+
+            meshIndex++;
+        }
+    }
+
+    if (correctedMeshCount > 0)
+    {
+        printf("INFO: Removed baked node transforms from %d skinned GLB mesh primitives\n", correctedMeshCount);
+    }
+}
+
+static Matrix GLBDataGetModelTransform(const GLBData* glb, float scale, bool inplace)
+{
+    Matrix transform = MatrixScale(scale, scale, scale);
+
+    if (inplace && glb->model.currentPose != NULL && glb->topoOrder != NULL && glb->model.skeleton.boneCount > 0)
+    {
+        int rootBone = glb->topoOrder[0];
+        Transform rootPose = glb->model.currentPose[rootBone];
+
+        Quaternion yawRotation = { 0.0f, rootPose.rotation.y, 0.0f, rootPose.rotation.w };
+        if (QuaternionLength(yawRotation) < 1e-8f) yawRotation = QuaternionIdentity();
+        else yawRotation = QuaternionNormalize(yawRotation);
+
+        Matrix translation = MatrixTranslate(-rootPose.translation.x * scale, 0.0f, -rootPose.translation.z * scale);
+        Matrix rotation = QuaternionToMatrix(QuaternionInvert(yawRotation));
+        transform = MatrixMultiply(transform, MatrixMultiply(translation, rotation));
+    }
+
+    return MatrixMultiply(glb->model.transform, transform);
+}
+
 static Transform GLBNodeLocalTransform(const cgltf_node* node)
 {
     Transform transform = {
@@ -1920,6 +2144,7 @@ static bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int e
     }
 
     GLBDataLoadSourceTiming(data, filename);
+    GLBDataUndoSkinnedMeshNodeTransforms(data);
 
     // Compute topological bone order (parent always before child)
     data->topoOrder    = (int*)malloc(bc * sizeof(int));
@@ -2011,6 +2236,8 @@ static bool TransformDataSampleFrameGLBExact(
             glb->sourceGlobalPose[boneIdx].translation = Vector3Add(glb->sourceGlobalPose[boneIdx].translation, parentPose.translation);
         }
     }
+
+    GLBDataUpdateModelPose(glb, glb->sourceGlobalPose);
 
     int n = data->jointCount;
     if (n > boneCount) n = boneCount;
@@ -4082,6 +4309,7 @@ typedef struct {
     bool drawOrigin;
     bool drawGrid;
     bool drawChecker;
+    bool drawMeshes;
     bool drawCapsules;
     bool drawWireframes;
     bool drawSkeleton;
@@ -4115,7 +4343,8 @@ void RenderSettingsInit(RenderSettings* settings, int argc, char** argv)
     settings->drawOrigin = ArgBool(argc, argv, "drawOrigin", true);
     settings->drawGrid = ArgBool(argc, argv, "drawGrid", false);
     settings->drawChecker = ArgBool(argc, argv, "drawChecker", true);
-    settings->drawCapsules = ArgBool(argc, argv, "drawCapsules", true);
+    settings->drawMeshes = ArgBool(argc, argv, "drawMeshes", true);
+    settings->drawCapsules = ArgBool(argc, argv, "drawCapsules", !settings->drawMeshes);
     settings->drawWireframes = ArgBool(argc, argv, "drawWireframes", false);
     settings->drawSkeleton = ArgBool(argc, argv, "drawSkeleton", true);
     settings->drawTransforms = ArgBool(argc, argv, "drawTransforms", false);
@@ -4420,14 +4649,18 @@ static inline void GuiRenderSettings(RenderSettings* settings, CapsuleData* caps
     GuiCheckBox((Rectangle){ screenWidth - 250, 260, 20, 20 }, "Draw Origin", &settings->drawOrigin);
     GuiCheckBox((Rectangle){ screenWidth - 130, 260, 20, 20 }, "Draw Grid", &settings->drawGrid);
     GuiCheckBox((Rectangle){ screenWidth - 250, 290, 20, 20 }, "Draw Checker", &settings->drawChecker);
-    GuiCheckBox((Rectangle){ screenWidth - 130, 290, 20, 20 }, "Draw Capsules", &settings->drawCapsules);
-    GuiCheckBox((Rectangle){ screenWidth - 250, 320, 20, 20 }, "Draw Wireframes", &settings->drawWireframes);
-    GuiCheckBox((Rectangle){ screenWidth - 130, 320, 20, 20 }, "Draw Skeleton", &settings->drawSkeleton);
-    GuiCheckBox((Rectangle){ screenWidth - 250, 350, 20, 20 }, "Draw Transforms", &settings->drawTransforms);
-    GuiCheckBox((Rectangle){ screenWidth - 130, 350, 20, 20 }, "Draw AO", &settings->drawAO);
-    GuiCheckBox((Rectangle){ screenWidth - 250, 380, 20, 20 }, "Draw Shadows", &settings->drawShadows);
-    GuiCheckBox((Rectangle){ screenWidth - 130, 380, 20, 20 }, "Draw End Sites", &settings->drawEndSites);
-    GuiCheckBox((Rectangle){ screenWidth - 250, 410, 20, 20 }, "Draw FPS", &settings->drawFPS);
+    if (GuiCheckBox((Rectangle){ screenWidth - 130, 290, 20, 20 }, "Draw Meshes", &settings->drawMeshes) && settings->drawMeshes)
+    {
+        settings->drawCapsules = false;
+    }
+    GuiCheckBox((Rectangle){ screenWidth - 250, 320, 20, 20 }, "Draw Capsules", &settings->drawCapsules);
+    GuiCheckBox((Rectangle){ screenWidth - 130, 320, 20, 20 }, "Draw Wireframes", &settings->drawWireframes);
+    GuiCheckBox((Rectangle){ screenWidth - 250, 350, 20, 20 }, "Draw Skeleton", &settings->drawSkeleton);
+    GuiCheckBox((Rectangle){ screenWidth - 130, 350, 20, 20 }, "Draw Transforms", &settings->drawTransforms);
+    GuiCheckBox((Rectangle){ screenWidth - 250, 380, 20, 20 }, "Draw AO", &settings->drawAO);
+    GuiCheckBox((Rectangle){ screenWidth - 130, 380, 20, 20 }, "Draw Shadows", &settings->drawShadows);
+    GuiCheckBox((Rectangle){ screenWidth - 250, 410, 20, 20 }, "Draw End Sites", &settings->drawEndSites);
+    GuiCheckBox((Rectangle){ screenWidth - 130, 410, 20, 20 }, "Draw FPS", &settings->drawFPS);
     GuiLabel((Rectangle){ screenWidth - 130, 410, 100, 20 }, "H Key - Hide UI");
 }
 
@@ -4776,11 +5009,20 @@ static void ApplicationUpdate(void* voidApplicationState)
     {
         app->scrubberSettings.playTime += app->scrubberSettings.playSpeed * GetFrameTime();
 
-        if (app->scrubberSettings.playTime >= app->scrubberSettings.timeMax)
+        if (app->scrubberSettings.playTime > app->scrubberSettings.timeMax)
         {
-            app->scrubberSettings.playTime = (app->scrubberSettings.looping && app->scrubberSettings.timeMax >= 1e-8f) ?
-                fmod(app->scrubberSettings.playTime, app->scrubberSettings.timeMax) + app->scrubberSettings.timeMin :
-                app->scrubberSettings.timeMax;
+            float loopSpan = app->scrubberSettings.timeMax - app->scrubberSettings.timeMin;
+
+            if (app->scrubberSettings.looping && loopSpan >= 1e-8f)
+            {
+                app->scrubberSettings.playTime =
+                    fmodf(app->scrubberSettings.playTime - app->scrubberSettings.timeMin, loopSpan) +
+                    app->scrubberSettings.timeMin;
+            }
+            else
+            {
+                app->scrubberSettings.playTime = app->scrubberSettings.timeMax;
+            }
         }
     }
 
@@ -5020,6 +5262,59 @@ static void ApplicationUpdate(void* voidApplicationState)
     }
 
     PROFILE_END(RenderingGround);
+
+    // Draw GLB Meshes
+
+    if (app->renderSettings.drawMeshes)
+    {
+        int meshIsCapsule = 0;
+        int meshOccluderCount = 0;
+
+        SetShaderValue(app->shader, app->uniforms.isCapsule, &meshIsCapsule, SHADER_UNIFORM_INT);
+        SetShaderValue(app->shader, app->uniforms.aoCapsuleCount, &meshOccluderCount, SHADER_UNIFORM_INT);
+        SetShaderValue(app->shader, app->uniforms.shadowCapsuleCount, &meshOccluderCount, SHADER_UNIFORM_INT);
+
+        for (int i = 0; i < app->characterData.count; i++)
+        {
+            if (!app->characterData.isGLB[i]) continue;
+
+            GLBData* glb = &app->characterData.glbData[i];
+            if (glb->model.meshCount == 0) continue;
+
+            Vector3 meshColor = {
+                app->characterData.colors[i].r / 255.0f,
+                app->characterData.colors[i].g / 255.0f,
+                app->characterData.colors[i].b / 255.0f
+            };
+            float meshOpacity = app->characterData.opacities[i];
+
+            Model drawModel = glb->model;
+
+            for (int materialIndex = 0; materialIndex < drawModel.materialCount; materialIndex++)
+            {
+                drawModel.materials[materialIndex].shader = app->shader;
+            }
+
+            drawModel.transform = GLBDataGetModelTransform(glb, app->characterData.scales[i], app->scrubberSettings.inplace);
+
+            SetShaderValue(app->shader, app->uniforms.objectColor, &meshColor, SHADER_UNIFORM_VEC3);
+            SetShaderValue(app->shader, app->uniforms.objectOpacity, &meshOpacity, SHADER_UNIFORM_FLOAT);
+
+            if (meshOpacity < 1.0f)
+            {
+                rlDrawRenderBatchActive();
+                rlDisableDepthMask();
+            }
+
+            DrawModel(drawModel, Vector3Zero(), 1.0f, WHITE);
+
+            if (meshOpacity < 1.0f)
+            {
+                rlDrawRenderBatchActive();
+                rlEnableDepthMask();
+            }
+        }
+    }
 
     // Draw Capsules
 
