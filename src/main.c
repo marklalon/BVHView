@@ -70,6 +70,7 @@ int main(int argc, char** argv)
     if (app.characterData.count > 0)
     {
         app.characterData.active = app.characterData.count - 1;
+        if (app.characterData.hasSkinnedMesh) { app.renderSettings.drawMeshes = true; app.renderSettings.drawCapsules = false; }
         CapsuleDataUpdateForCharacters(&app.capsuleData, &app.characterData);
         ScrubberSettingsRecomputeLimits(&app.scrubberSettings, &app.characterData);
         ScrubberSettingsInitMaxs(&app.scrubberSettings, &app.characterData);
