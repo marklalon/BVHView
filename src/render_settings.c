@@ -11,7 +11,7 @@
 
 void RenderSettingsInit(RenderSettings* settings, int argc, char** argv)
 {
-    settings->backgroundColor = ArgColor(argc, argv, "backgroundColor", WHITE);
+    settings->backgroundColor = ArgColor(argc, argv, "backgroundColor", DEFAULT_BACKGROUND_COLOR);
     settings->sunLightConeAngle = ArgFloat(argc, argv, "sunLightConeAngle", 0.2f);
     settings->sunLightStrength = ArgFloat(argc, argv, "sunLightStrength", 0.25f);
     settings->sunAzimuth = ArgFloat(argc, argv, "sunAzimuth", PI / 4.0f);

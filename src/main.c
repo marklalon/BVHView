@@ -8,6 +8,7 @@
 #include <string.h>
 #include "raylib.h"
 #include "app.h"
+#include "gui.h"
 #include "shaders.h"
 #include "models.h"
 #include "character_data.h"
@@ -36,6 +37,8 @@ int main(int argc, char** argv)
     SetConfigFlags(FLAG_MSAA_4X_HINT);
     InitWindow(app.screenWidth, app.screenHeight, "BVHView");
     SetTargetFPS(0);
+
+    GuiInitDarkMode();
 
     OrbitCameraInit(&app.camera, argc, argv);
 

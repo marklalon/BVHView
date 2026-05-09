@@ -10,6 +10,8 @@
 #include <stdbool.h>
 #include "raylib.h"
 
+#define DEFAULT_BACKGROUND_COLOR (Color){ 180, 180, 180, 255 }
+
 typedef struct RenderSettings {
     Color backgroundColor;
     float sunLightConeAngle;

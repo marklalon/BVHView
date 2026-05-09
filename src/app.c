@@ -41,7 +41,7 @@ void OrbitCameraInit(OrbitCamera* camera, int argc, char** argv)
     camera->track = ArgBool(argc, argv, "cameraTrack", true);
     camera->trackBone = ArgInt(argc, argv, "cameraTrackBone", 0);
     camera->showSkeletonPanel = false;
-    camera->selectedBone = -1;
+    camera->selectedBone = 0;
 }
 
 void OrbitCameraUpdate(OrbitCamera* camera, Vector3 target, float azimuthDelta, float altitudeDelta, float offsetDeltaX, float offsetDeltaY, float mouseWheel, float dt)
@@ -171,7 +171,7 @@ void ApplicationUpdate(void* voidApplicationState)
         float mouseWheel = GetMouseWheelMove();
         if (app->camera.showSkeletonPanel && app->renderSettings.drawUI)
         {
-            Rectangle skeletonPanel = { 220.0f, 10.0f, 260.0f, 600.0f };
+            Rectangle skeletonPanel = { 220.0f, 10.0f, 260.0f, 620.0f };
             if (CheckCollisionPointRec(GetMousePosition(), skeletonPanel)) mouseWheel = 0.0f;
         }
         OrbitCameraUpdate(&app->camera, cameraTarget, (middleDown && !shiftHeld) ? GetMouseDelta().x : 0.0f, (middleDown && !shiftHeld) ? GetMouseDelta().y : 0.0f, (middleDown && shiftHeld) ? -GetMouseDelta().x : 0.0f, (middleDown && shiftHeld) ? -GetMouseDelta().y : 0.0f, mouseWheel, GetFrameTime());
@@ -225,7 +225,7 @@ void ApplicationUpdate(void* voidApplicationState)
     {
         int groundIsCapsule = 0;
         int groundUseTexture = 0;
-        Vector3 groundColor = { 0.75f, 0.75f, 0.75f };
+        Vector3 groundColor = { 0.65f, 0.65f, 0.65f };
         SetShaderValue(app->shader, app->uniforms.isCapsule, &groundIsCapsule, SHADER_UNIFORM_INT);
         SetShaderValue(app->shader, app->uniforms.useTexture, &groundUseTexture, SHADER_UNIFORM_INT);
         SetShaderValue(app->shader, app->uniforms.objectColor, &groundColor, SHADER_UNIFORM_VEC3);
@@ -398,8 +398,8 @@ void ApplicationUpdate(void* voidApplicationState)
         GuiCharacterData(&app->characterData, &app->fileDialogState, &app->scrubberSettings, app->errMsg, app->argc, app->argv);
         if (app->characterData.colorPickerActive)
         {
-            GuiGroupBox((Rectangle){ app->screenWidth - 180, 450, 160, 140 }, "Color Picker");
-            GuiColorPicker((Rectangle){ app->screenWidth - 165, 465, 110, 110 }, NULL, &app->characterData.colors[app->characterData.active]);
+            GuiCustomGroupBox((Rectangle){ app->screenWidth - 180, 500, 160, 150 }, "Color Picker");
+            GuiColorPicker((Rectangle){ app->screenWidth - 165, 525, 110, 110 }, NULL, &app->characterData.colors[app->characterData.active]);
         }
         GuiScrubberSettings(&app->scrubberSettings, &app->characterData, app->screenWidth, app->screenHeight);
         if (app->fileDialogState.windowActive) GuiUnlock();

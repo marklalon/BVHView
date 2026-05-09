@@ -19,6 +19,8 @@ typedef struct CapsuleData CapsuleData;
 // Include external file dialog header for GuiWindowFileDialogState type
 #include "../examples/custom_file_dialog/gui_window_file_dialog.h"
 
+void GuiCustomGroupBox(Rectangle bounds, const char* text);
+void GuiInitDarkMode(void);
 void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterData, int argc, char** argv);
 int GetJointDepth(int jointIndex, const int* parents);
 void GuiSkeletonPanel(OrbitCamera* camera, CharacterData* characterData, int screenWidth, int screenHeight);
