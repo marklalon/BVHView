@@ -3,14 +3,18 @@ BUILD_MODE ?= DEBUG
 DEFINES = -D _DEFAULT_SOURCE -D RAYLIB_BUILD_MODE=$(BUILD_MODE) -D $(PLATFORM)
 PLATFORM_OS ?= $(shell uname)
 
+# Source files
+SRCDIR = src
+SOURCES = $(wildcard $(SRCDIR)/*.c)
+
 ifeq ($(PLATFORM),PLATFORM_DESKTOP)
     
     CC = gcc
 
     ifeq ($(PLATFORM_OS),Darwin) # macOS settings
         EXT=
-        RAYLIB_DIR = ~/raylib
-        INCLUDE_DIR = -I ./ -I $(RAYLIB_DIR)/raylib/src -I $(RAYLIB_DIR)/raygui/src
+        RAYLIB_DIR ?= ~/raylib
+        INCLUDE_DIR = -I ./ -I $(SRCDIR) -I $(RAYLIB_DIR)/raylib/src -I $(RAYLIB_DIR)/raygui/src
         LIBRARY_DIR = -L $(RAYLIB_DIR)/raylib/src
         ifeq ($(BUILD_MODE),RELEASE)
             CFLAGS = -D_DEFAULT_SOURCE -DPLATFORM_DESKTOP -Wall -D NDEBUG -O3 $(INCLUDE_DIR) $(LIBRARY_DIR)
@@ -22,8 +26,8 @@ ifeq ($(PLATFORM),PLATFORM_DESKTOP)
 
     ifeq ($(findstring Linux,$(PLATFORM_OS)),Linux)
         EXT=
-        RAYLIB_DIR = ~/raylib
-        INCLUDE_DIR = -I ./ -I $(RAYLIB_DIR)/raylib/src -I $(RAYLIB_DIR)/raygui/src
+        RAYLIB_DIR ?= ~/raylib
+        INCLUDE_DIR = -I ./ -I $(SRCDIR) -I $(RAYLIB_DIR)/raylib/src -I $(RAYLIB_DIR)/raygui/src
         LIBRARY_DIR = -L $(RAYLIB_DIR)/raylib/src
         ifeq ($(BUILD_MODE),RELEASE)
             CFLAGS ?= $(DEFINES) -Wall -Wno-format-truncation -D NDEBUG -O3 $(INCLUDE_DIR) $(LIBRARY_DIR)
@@ -35,8 +39,8 @@ ifeq ($(PLATFORM),PLATFORM_DESKTOP)
     
     ifneq ($(filter MINGW Windows_NT,$(PLATFORM_OS)),)
         EXT = .exe
-        RAYLIB_DIR = C:/raylib
-        INCLUDE_DIR = -I ./ -I $(RAYLIB_DIR)/raylib/src -I $(RAYLIB_DIR)/raygui/src
+        RAYLIB_DIR ?= C:/raylib
+        INCLUDE_DIR = -I ./ -I $(SRCDIR) -I $(RAYLIB_DIR)/raylib/src -I $(RAYLIB_DIR)/raygui/src
         LIBRARY_DIR = -L $(RAYLIB_DIR)/raylib/src
         ifeq ($(BUILD_MODE),RELEASE)
             CFLAGS ?= bvhview.res $(DEFINES) -Wall -mwindows -D NDEBUG -O3 $(INCLUDE_DIR) $(LIBRARY_DIR) 
@@ -51,8 +55,8 @@ endif
 ifeq ($(PLATFORM),PLATFORM_WEB)
     CC = emcc
     EXT = .html
-    RAYLIB_DIR = C:/raylib
-    INCLUDE_DIR = -I ./ -I $(RAYLIB_DIR)/raylib/src -I $(RAYLIB_DIR)/raygui/src
+    RAYLIB_DIR ?= C:/raylib
+    INCLUDE_DIR = -I ./ -I $(SRCDIR) -I $(RAYLIB_DIR)/raylib/src -I $(RAYLIB_DIR)/raygui/src
     LIBRARY_DIR = -L $(RAYLIB_DIR)/raylib/src
     ifeq ($(BUILD_MODE),RELEASE)
         CFLAGS ?= $(DEFINES) $(RAYLIB_DIR)/raylib/src/libraylib.web.a -Os -s USE_GLFW=3 -s FORCE_FILESYSTEM=1 -s MAX_WEBGL_VERSION=2 -s ALLOW_MEMORY_GROWTH=1 --shell-file ./shell.html $(INCLUDE_DIR) $(LIBRARY_DIR)
@@ -65,8 +69,8 @@ endif
 
 all: bvhview
 
-bvhview: bvhview.c
-	$(CC) -o $@$(EXT) bvhview.c $(CFLAGS) $(LIBS) 
+bvhview: $(SOURCES)
+	$(CC) -o $@$(EXT) $(SOURCES) $(CFLAGS) $(LIBS) 
 
 clean:
 	rm bvhview$(EXT)
