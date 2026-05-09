@@ -52,5 +52,6 @@ typedef struct ApplicationState {
 
 void ApplicationUpdate(void* voidApplicationState);
 void OnFileLoaded(ApplicationState* app);
+void ApplicationCleanup(ApplicationState* app);
 
 #endif // APP_H

@@ -85,6 +85,7 @@ int main(int argc, char** argv)
     }
 #endif
 
+    ApplicationCleanup(&app);
     CapsuleDataFree(&app.capsuleData);
     CharacterDataFree(&app.characterData);
     UnloadModel(app.capsuleModel);

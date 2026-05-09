@@ -96,6 +96,14 @@ static void FreeFileList(ApplicationState* app)
     app->fileListCount = 0;
 }
 
+void ApplicationCleanup(ApplicationState* app)
+{
+    FreeFileList(app);
+    UnloadDirectoryFiles(app->fileDialogState.dirFiles);
+    app->fileDialogState.dirFiles.count = 0;
+    app->fileDialogState.dirFiles.paths = NULL;
+}
+
 // Build sorted file list of .bvh/.glb/.gltf files in the directory of the given path.
 // Skips scanning if the directory hasn't changed since the last call.
 static void BuildFileList(ApplicationState* app, const char* currentFilePath)
@@ -200,10 +208,24 @@ void OnFileLoaded(ApplicationState* app)
     CapsuleDataUpdateForCharacters(&app->capsuleData, &app->characterData);
     ScrubberSettingsRecomputeLimits(&app->scrubberSettings, &app->characterData);
     ScrubberSettingsInitMaxs(&app->scrubberSettings, &app->characterData);
-    char windowTitle[528];
-    snprintf(windowTitle, sizeof(windowTitle), "%s - BVHView", app->characterData.filePaths[app->characterData.active]);
-    SetWindowTitle(windowTitle);
+
+    // Build file list first so we know the count/index for the title suffix
     BuildFileList(app, app->characterData.filePaths[app->characterData.active]);
+
+    char windowTitle[528];
+    if (app->fileListCount > 1)
+    {
+        snprintf(windowTitle, sizeof(windowTitle), "%s (%d/%d) - BVHView",
+                 app->characterData.filePaths[app->characterData.active],
+                 app->fileListIndex + 1,
+                 app->fileListCount);
+    }
+    else
+    {
+        snprintf(windowTitle, sizeof(windowTitle), "%s - BVHView",
+                 app->characterData.filePaths[app->characterData.active]);
+    }
+    SetWindowTitle(windowTitle);
 }
 
 void ApplicationUpdate(void* voidApplicationState)
