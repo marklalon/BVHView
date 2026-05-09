@@ -537,11 +537,13 @@ void GuiScrubberSettings(ScrubberSettings* settings, CharacterData* characterDat
         if (!settings->frameMaxEdit) { settings->frameMax = settings->frameMaxSelect; ScrubberSettingsClamp(settings, characterData); }
     }
     GuiLabel((Rectangle){ screenWidth / 2 + 530, screenHeight - 80, 100, 20 }, TextFormat("of %i", settings->frameLimit));
+    Rectangle sliderRect = { screenWidth / 2 - 540, screenHeight - 50, 1080, 20 };
     float frameFloatPrev = settings->frameSnap ? (float)frame : settings->playTime / frameTime;
     float frameFloat = frameFloatPrev;
-    GuiSliderBar((Rectangle){ screenWidth / 2 - 540, screenHeight - 50, 1080, 20 }, TextFormat("%5.2f", settings->playTime), TextFormat("%i", frame), &frameFloat, (float)settings->frameMin, (float)settings->frameMax);
+    GuiSliderBar(sliderRect, TextFormat("%5.2f", settings->playTime), TextFormat("%i", frame), &frameFloat, (float)settings->frameMin, (float)settings->frameMax);
     if (frameFloat != frameFloatPrev)
     {
+        settings->playing = false;
         if (settings->frameSnap)
         {
             frame = ClampInt((int)(frameFloat + 0.5f), settings->frameMin, settings->frameMax);

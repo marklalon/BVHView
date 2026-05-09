@@ -20,7 +20,7 @@ void ScrubberSettingsInit(ScrubberSettings* settings, int argc, char** argv)
     settings->inplace = ArgBool(argc, argv, "inplace", false);
     settings->playTime = ArgFloat(argc, argv, "playTime", 0.0f);
     settings->playSpeed = ArgFloat(argc, argv, "playSpeed", 1.0f);
-    settings->frameSnap = ArgBool(argc, argv, "frameSnap", true);
+    settings->frameSnap = ArgBool(argc, argv, "frameSnap", false);
     settings->sampleMode = ArgEnum(argc, argv, "sampleMode", 3, (const char*[]){ "nearest", "linear", "cubic" }, 1);
     settings->timeLimit = 0.0f;
     settings->frameLimit = 0;
