@@ -94,6 +94,13 @@ static void FreeFileList(ApplicationState* app)
         app->fileList[i] = NULL;
     }
     app->fileListCount = 0;
+
+    for (int i = 0; i < app->groupCount; i++)
+    {
+        free(app->groupNames[i]);
+        app->groupNames[i] = NULL;
+    }
+    app->groupCount = 0;
 }
 
 void ApplicationCleanup(ApplicationState* app)
@@ -120,10 +127,18 @@ static void BuildFileList(ApplicationState* app, const char* currentFilePath)
             if (strcmp(app->fileList[i], currentFilePath) == 0)
             {
                 app->fileListIndex = i;
-                return;
+                break;
             }
         }
-        // If not found (shouldn't happen), keep current index
+        // Update current group index to match new file index
+        for (int g = app->groupCount - 1; g >= 0; g--)
+        {
+            if (app->fileListIndex >= app->groupStartIndex[g])
+            {
+                app->currentGroupIndex = g;
+                break;
+            }
+        }
         return;
     }
 
@@ -194,6 +209,42 @@ static void BuildFileList(ApplicationState* app, const char* currentFilePath)
             app->fileListIndex = i;
     }
     app->fileListCount = matchedCount;
+
+    // Build prefix-based groups from sorted file list
+    // Files are already sorted by filename, so same-prefix files are adjacent.
+    // Prefix = part of filename (without extension) before the first '_'.
+    app->groupCount = 0;
+    app->currentGroupIndex = 0;
+
+    for (int i = 0; i < matchedCount; i++)
+    {
+        const char* fileName = ExtractFilename(app->fileList[i]);
+        char nameNoExt[256];
+        snprintf(nameNoExt, sizeof(nameNoExt), "%s", fileName);
+        char* dot = strrchr(nameNoExt, '.');
+        if (dot) *dot = '\0';
+
+        char* underscore = strchr(nameNoExt, '_');
+        if (underscore) *underscore = '\0';
+
+        // Check if this prefix starts a new group
+        if (app->groupCount == 0 || strcmp(nameNoExt, app->groupNames[app->groupCount - 1]) != 0)
+        {
+            app->groupNames[app->groupCount] = strdup(nameNoExt);
+            app->groupStartIndex[app->groupCount] = i;
+            app->groupCount++;
+        }
+    }
+
+    // Find current group index based on current file index
+    for (int g = app->groupCount - 1; g >= 0; g--)
+    {
+        if (app->fileListIndex >= app->groupStartIndex[g])
+        {
+            app->currentGroupIndex = g;
+            break;
+        }
+    }
 }
 
 // Common post-load initialization: set active, update capsules, scrubber, window title, build file list
@@ -269,12 +320,12 @@ void ApplicationUpdate(void* voidApplicationState)
     if (IsKeyPressed(KEY_H) && !app->fileDialogState.windowActive)
         app->renderSettings.drawUI = !app->renderSettings.drawUI;
 
-    // PageUp/PageDown: switch to previous/next file in the same directory
+    // ArrowUp/ArrowDown: switch to previous/next file in the same directory
     if (!app->fileDialogState.windowActive && app->fileListCount > 1)
     {
         int direction = 0;
-        if (IsKeyPressed(KEY_PAGE_UP)) direction = -1;
-        else if (IsKeyPressed(KEY_PAGE_DOWN)) direction = 1;
+        if (IsKeyPressed(KEY_UP)) direction = -1;
+        else if (IsKeyPressed(KEY_DOWN)) direction = 1;
 
         if (direction != 0)
         {
@@ -307,6 +358,42 @@ void ApplicationUpdate(void* voidApplicationState)
                 app->fileListIndex = startIndex;
                 app->restoreCameraAfterSwitch = false;
                 CharacterDataFree(&app->characterData);
+                if (CharacterDataLoadFromFile(&app->characterData, app->fileList[startIndex], app->errMsg, 512))
+                    OnFileLoaded(app);
+            }
+        }
+    }
+
+    // PageUp/PageDown: switch to previous/next group (jump to first file of each group)
+    if (!app->fileDialogState.windowActive && app->groupCount > 1)
+    {
+        int direction = 0;
+        if (IsKeyPressed(KEY_PAGE_UP)) direction = -1;
+        else if (IsKeyPressed(KEY_PAGE_DOWN)) direction = 1;
+
+        if (direction != 0)
+        {
+            int targetGroup = (app->currentGroupIndex + direction + app->groupCount) % app->groupCount;
+            int targetIndex = app->groupStartIndex[targetGroup];
+
+            // Save the absolute camera view before switching.
+            app->savedCamPos = app->camera.cam3d.position;
+            app->savedCamTarget = app->camera.cam3d.target;
+            app->restoreCameraAfterSwitch = true;
+
+            CharacterDataFree(&app->characterData);
+            if (CharacterDataLoadFromFile(&app->characterData, app->fileList[targetIndex], app->errMsg, 512))
+            {
+                app->fileListIndex = targetIndex;
+                app->currentGroupIndex = targetGroup;
+                OnFileLoaded(app);
+            }
+            else
+            {
+                // Fallback: restore current file
+                app->restoreCameraAfterSwitch = false;
+                CharacterDataFree(&app->characterData);
+                int startIndex = app->fileListIndex;
                 if (CharacterDataLoadFromFile(&app->characterData, app->fileList[startIndex], app->errMsg, 512))
                     OnFileLoaded(app);
             }

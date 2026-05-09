@@ -38,11 +38,17 @@ typedef struct ApplicationState {
     GuiWindowFileDialogState fileDialogState;
     char errMsg[512];
 
-    // PageUp/PageDown file switching
+    // ArrowUp/Down file switching, PageUp/Down group switching
     char* fileList[4096];
     int fileListCount;
     int fileListIndex;
     char lastScannedDir[512];
+
+    // Prefix-based grouping (split filename on '_', first segment = group)
+    char* groupNames[4096];
+    int groupCount;
+    int groupStartIndex[4096];
+    int currentGroupIndex;
 
     // Camera preservation across file switch
     bool restoreCameraAfterSwitch;
