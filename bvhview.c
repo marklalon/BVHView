@@ -580,6 +580,8 @@ typedef struct {
     Vector3 offset;
     bool track;
     int trackBone;
+    bool showSkeletonPanel;
+    int selectedBone;
 
 } OrbitCamera;
 
@@ -598,6 +600,8 @@ static inline void OrbitCameraInit(OrbitCamera* camera, int argc, char** argv)
     camera->offset = ArgVector3(argc, argv, "cameraOffset", Vector3Zero());
     camera->track = ArgBool(argc, argv, "cameraTrack", true);
     camera->trackBone = ArgInt(argc, argv, "cameraTrackBone", 0);
+    camera->showSkeletonPanel = false;
+    camera->selectedBone = -1;
 }
 
 static inline void OrbitCameraUpdate(
@@ -4582,25 +4586,29 @@ static inline void DrawTransform(const Vector3 position, const Quaternion rotati
     DrawLine3D(position, Vector3Add(position, Vector3RotateByQuaternion((Vector3){ 0.0, 0.0, size }, rotation)), BLUE);
 }
 
-static inline void DrawSkeleton(TransformData* xformData, bool drawEndSites, Color color, Color endSiteColor)
+static inline void DrawSkeleton(TransformData* xformData, bool drawEndSites, Color color, Color endSiteColor, int highlightedBone)
 {
     for (int i = 0; i < xformData->jointCount; i++)
     {
+        bool isHighlighted = (i == highlightedBone);
+        Color c = isHighlighted ? YELLOW : color;
+        Color ec = isHighlighted ? ORANGE : endSiteColor;
+
         if (!xformData->endSite[i])
         {
             DrawSphereWires(
                 xformData->globalPositions[i],
-                0.01f,
+                isHighlighted ? 0.02f : 0.01f,
                 4,
                 6,
-                color);
+                c);
         }
         else if (drawEndSites)
         {
             DrawCubeWiresV(
                 xformData->globalPositions[i],
                 (Vector3){ 0.02f, 0.02f, 0.02f },
-                endSiteColor);
+                ec);
         }
 
         if (xformData->parents[i] != -1)
@@ -4610,14 +4618,14 @@ static inline void DrawSkeleton(TransformData* xformData, bool drawEndSites, Col
                 DrawLine3D(
                     xformData->globalPositions[i],
                     xformData->globalPositions[xformData->parents[i]],
-                    color);
+                    c);
             }
             else if (drawEndSites)
             {
                 DrawLine3D(
                     xformData->globalPositions[i],
                     xformData->globalPositions[xformData->parents[i]],
-                    endSiteColor);
+                    ec);
             }
         }
     }
@@ -4681,8 +4689,171 @@ static inline void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterD
     if (characterData->count > 0)
     {
         GuiToggle((Rectangle){ 30, 210, 100, 20 }, "Track", &camera->track);
-        GuiComboBox((Rectangle){ 30, 240, 150, 20 }, characterData->jointNamesCombo[characterData->active], &camera->trackBone);
+
+        // Skeleton button: use Toggle so it visually reflects panel open/closed state
+        bool skeletonToggle = camera->showSkeletonPanel;
+        GuiToggle((Rectangle){ 30, 240, 100, 20 }, "Skeleton", &skeletonToggle);
+
+        // Show skeleton (bone) count to the right of the button
+        int ci = characterData->active;
+        if (ci >= 0 && ci < characterData->count)
+        {
+            int jointCount = characterData->xformData[ci].jointCount;
+            char jointText[32];
+            snprintf(jointText, sizeof(jointText), "%d", jointCount);
+            DrawText(jointText, 135, 245, 10, GRAY);
+        }
+
+        if (skeletonToggle != camera->showSkeletonPanel)
+        {
+            camera->showSkeletonPanel = skeletonToggle;
+            // Clear bone highlight when closing the panel
+            if (!skeletonToggle)
+            {
+                camera->selectedBone = -1;
+            }
+        }
     }
+}
+
+// Helper: compute the depth of a joint by walking up the parent chain
+static inline int GetJointDepth(int jointIndex, const int* parents)
+{
+    int depth = 0;
+    int p = parents[jointIndex];
+    while (p != -1)
+    {
+        depth++;
+        p = parents[p];
+    }
+    return depth;
+}
+
+// Skeleton Panel: shows a scrollable list of all bone nodes with indentation.
+// Clicking a node selects it (highlights in 3D). If Track is on, also sets trackBone.
+static inline void GuiSkeletonPanel(OrbitCamera* camera, CharacterData* characterData, int screenWidth, int screenHeight)
+{
+    int ci = characterData->active;
+    if (ci < 0 || ci >= characterData->count) return;
+
+    TransformData* xform = &characterData->xformData[ci];
+    int jointCount = xform->jointCount;
+    const int* boneParents = xform->parents;
+
+    // Determine joint names depending on BVH or GLB.
+    // Use a static buffer to avoid per-frame allocation.
+    static const char* s_names[1024];
+    const char** names = s_names;
+
+    if (characterData->isGLB[ci])
+    {
+        // For GLB: names come from model.skeleton.bones, indexed via topoOrder
+        GLBData* glb = &characterData->glbData[ci];
+        for (int i = 0; i < jointCount && i < 1024; i++)
+        {
+            int origIdx = glb->topoOrder[i];
+            names[i] = glb->model.skeleton.bones[origIdx].name;
+        }
+    }
+    else
+    {
+        // For BVH: names from bvhData.joints (already in DFS order matching xformData)
+        for (int i = 0; i < jointCount && i < 1024; i++)
+        {
+            names[i] = characterData->bvhData[ci].joints[i].name;
+        }
+    }
+
+    // Panel dimensions
+    int panelWidth = 260;
+    int panelHeight = 600;
+    int panelX = 220;
+    int panelY = 10;
+
+    // GroupBox
+    GuiGroupBox((Rectangle){ panelX, panelY, panelWidth, panelHeight }, "Skeleton");
+
+    // Scroll area: items start right after the GroupBox title bar.
+    int itemHeight = 22;
+    float borderWidth = (float)GuiGetStyle(DEFAULT, BORDER_WIDTH);
+    float scrollBarWidth = (float)GuiGetStyle(LISTVIEW, SCROLLBAR_WIDTH);
+    int scrollAreaHeight = panelHeight - 12;
+    int contentHeight = jointCount * itemHeight;
+
+    // Keep a small padding inside the panel and reserve width for the vertical scrollbar
+    // so raygui never creates a horizontal scrollbar.
+    Rectangle scrollBounds = {
+        (float)panelX + 8,
+        (float)panelY + 8,
+        (float)panelWidth - 16,
+        (float)scrollAreaHeight
+    };
+    Rectangle content = {
+        0,
+        0,
+        scrollBounds.width - 2.0f*borderWidth - scrollBarWidth,
+        (float)contentHeight
+    };
+
+    // View is the visible portion of the content returned by GuiScrollPanel.
+    static Vector2 scroll = { 0, 0 };
+    Rectangle view = { 0 };
+
+    GuiScrollPanel(scrollBounds, NULL, content, &scroll, &view);
+
+    // Visible range: scroll.y is the content offset and is negative when scrolled down.
+    int visibleStart = MaxInt(0, (int)(-scroll.y / itemHeight));
+    int visibleCount = (int)(view.height / itemHeight) + 2;
+    if (visibleStart >= jointCount) visibleStart = jointCount - 1;
+    if (visibleStart < 0) visibleStart = 0;
+
+    BeginScissorMode((int)view.x, (int)view.y, (int)view.width, (int)view.height);
+
+    // Draw each visible item inside the clipped view.
+    for (int i = visibleStart; i < jointCount && i < visibleStart + visibleCount; i++)
+    {
+        int depth = GetJointDepth(i, boneParents);
+        int indent = depth * 2;
+
+        static char displayName[256];
+        int pos = 0;
+        for (int s = 0; s < indent && pos < 250; s++)
+        {
+            displayName[pos++] = ' ';
+        }
+
+        const char* nm = names[i];
+        int nameLen = (int)strlen(nm);
+        int maxNameLen = 255 - pos;
+        if (nameLen > maxNameLen) nameLen = maxNameLen;
+        memcpy(displayName + pos, nm, nameLen);
+        pos += nameLen;
+        displayName[pos] = '\0';
+
+        Rectangle itemRec = {
+            view.x,
+            view.y + scroll.y + (float)(i * itemHeight),
+            view.width,
+            (float)itemHeight - 2
+        };
+
+        if (i == camera->selectedBone)
+        {
+            DrawRectangleRec(itemRec, LIGHTGRAY);
+            DrawRectangleLines((int)itemRec.x, (int)itemRec.y, (int)itemRec.width, (int)itemRec.height, DARKGRAY);
+        }
+
+        if (GuiLabelButton(itemRec, displayName))
+        {
+            camera->selectedBone = i;
+            if (camera->track)
+            {
+                camera->trackBone = i;
+            }
+        }
+    }
+
+    EndScissorMode();
 }
 
 static inline void GuiRenderSettings(RenderSettings* settings, CapsuleData* capsuleData, int screenWidth, int screenHeight)
@@ -5229,6 +5400,18 @@ static void ApplicationUpdate(void* voidApplicationState)
     {
         bool shiftHeld = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
         bool middleDown = IsMouseButtonDown(2);
+
+        // Don't zoom the camera when scrolling over the Skeleton Panel
+        float mouseWheel = GetMouseWheelMove();
+        if (app->camera.showSkeletonPanel && app->renderSettings.drawUI)
+        {
+            Rectangle skeletonPanel = { 220.0f, 10.0f, 260.0f, 600.0f };
+            if (CheckCollisionPointRec(GetMousePosition(), skeletonPanel))
+            {
+                mouseWheel = 0.0f;
+            }
+        }
+
         OrbitCameraUpdate(
             &app->camera,
             cameraTarget,
@@ -5236,7 +5419,7 @@ static void ApplicationUpdate(void* voidApplicationState)
             (middleDown && !shiftHeld) ? GetMouseDelta().y : 0.0f,
             (middleDown && shiftHeld) ? -GetMouseDelta().x : 0.0f,
             (middleDown && shiftHeld) ? -GetMouseDelta().y : 0.0f,
-            GetMouseWheelMove(),
+            mouseWheel,
             GetFrameTime());
     }
 
@@ -5608,7 +5791,8 @@ static void ApplicationUpdate(void* voidApplicationState)
                 &app->characterData.xformData[i],
                 app->renderSettings.drawEndSites,
                 DARKGRAY,
-                GRAY);
+                GRAY,
+                (i == app->characterData.active) ? app->camera.selectedBone : -1);
         }
     }
 
@@ -5665,6 +5849,13 @@ static void ApplicationUpdate(void* voidApplicationState)
         // Camera Settings
 
         GuiOrbitCamera(&app->camera, &app->characterData, app->argc, app->argv);
+
+        // Skeleton Panel (overlay)
+
+        if (app->camera.showSkeletonPanel)
+        {
+            GuiSkeletonPanel(&app->camera, &app->characterData, app->screenWidth, app->screenHeight);
+        }
 
         // Characters
 
