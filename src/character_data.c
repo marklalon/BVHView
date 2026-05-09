@@ -65,6 +65,7 @@ void CharacterDataInit(CharacterData* data, int argc, char** argv)
         TransformDataInit(&data->xformTmp3[i]);
         data->jointNamesCombo[i] = NULL;
         data->isGLB[i] = false;
+        data->visible[i] = true;
         GLBDataInit(&data->glbData[i]);
     }
     data->colorPickerActive = ArgBool(argc, argv, "colorPickerActive", false);
@@ -134,6 +135,7 @@ bool CharacterDataLoadFromFile(CharacterData* data, const char* path, char* errM
         data->autoScales[data->count] = 1.8f / height;
         TransformDataSampleFrameGLB(&data->xformData[data->count], glb, 0, data->scales[data->count]);
         TransformDataForwardKinematics(&data->xformData[data->count]);
+        data->visible[data->count] = true;
         data->count++;
         if (glb->model.meshCount > 0) data->hasSkinnedMesh = true;
         return true;
@@ -172,6 +174,7 @@ bool CharacterDataLoadFromFile(CharacterData* data, const char* path, char* errM
                 if (i > 0) strcat(data->jointNamesCombo[data->count], ";");
                 strcat(data->jointNamesCombo[data->count], data->bvhData[data->count].joints[i].name);
             }
+            data->visible[data->count] = true;
             data->count++;
             return true;
         }

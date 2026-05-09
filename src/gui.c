@@ -97,6 +97,7 @@ void GuiInitDarkMode(void)
     GuiSetStyle(CHECKBOX, BASE_COLOR_DISABLED, (int)cInner);
     GuiSetStyle(CHECKBOX, TEXT_COLOR_DISABLED, (int)cText);
     GuiSetStyle(CHECKBOX, BORDER_WIDTH, 1);
+    GuiSetStyle(CHECKBOX, CHECK_PADDING, 4);
 
     // COMBOBOX
     GuiSetStyle(COMBOBOX, BORDER_COLOR_NORMAL, (int)cBorder);
@@ -414,8 +415,33 @@ void GuiCharacterData(CharacterData* characterData, GuiWindowFileDialogState* fi
             strcat(bvhNameShort, characterData->names[i]);
         else { memcpy(bvhNameShort, characterData->names[i], 14); memcpy(bvhNameShort + 14, "...", 4); }
         bool bvhSelected = i == characterData->active;
-        GuiToggle((Rectangle){ 30, offsetHeight + 50 + i * 30, 120, 20 }, bvhNameShort, &bvhSelected);
-        DrawText(characterData->isGLB[i] ? "GLB" : "BVH", 155, offsetHeight + 53 + i * 30, 10, (Color){ 153, 153, 153, 255 });
+        Rectangle toggleRect = (Rectangle){ 30, offsetHeight + 50 + i * 30, 120, 20 };
+        GuiToggle(toggleRect, bvhNameShort, &bvhSelected);
+        // Tooltip: show filename on hover over the name button
+        Vector2 mousePos = GetMousePosition();
+        if (CheckCollisionPointRec(mousePos, toggleRect) && strlen(characterData->filePaths[i]) > strlen(characterData->names[i]))
+        {
+            const char* fileName = ExtractFilename(characterData->filePaths[i]);
+            int textWidth = MeasureText(fileName, 10);
+            Rectangle tooltipRect = (Rectangle){ toggleRect.x, toggleRect.y - 24, (float)textWidth + 10, 22 };
+            DrawRectangleRec(tooltipRect, (Color){ 40, 40, 40, 230 });
+            DrawRectangleLinesEx(tooltipRect, 1, (Color){ 140, 140, 143, 255 });
+            DrawText(fileName, (int)tooltipRect.x + 5, (int)tooltipRect.y + 6, 10, LIGHTGRAY);
+        }
+        GuiCheckBox((Rectangle){ 155, offsetHeight + 50 + i * 30, 20, 20 }, "", &characterData->visible[i]);
+        // If active character was just hidden, switch to another visible one
+        if (!characterData->visible[i] && i == characterData->active)
+        {
+            for (int j = 0; j < characterData->count; j++)
+            {
+                if (characterData->visible[j])
+                {
+                    characterData->active = j;
+                    ScrubberSettingsClamp(scrubberSettings, characterData);
+                    break;
+                }
+            }
+        }
         if (bvhSelected && (characterData->active != i))
         {
             characterData->active = i;

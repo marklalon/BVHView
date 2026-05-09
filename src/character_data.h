@@ -38,6 +38,7 @@ typedef struct CharacterData {
     bool colorPickerActive;
     bool hasSkinnedMesh;
     bool isGLB[CHARACTERS_MAX];
+    bool visible[CHARACTERS_MAX];
     GLBData glbData[CHARACTERS_MAX];
 } CharacterData;
 

@@ -134,6 +134,7 @@ void ApplicationUpdate(void* voidApplicationState)
     // Sample Animation Data
     for (int i = 0; i < app->characterData.count; i++)
     {
+        if (!app->characterData.visible[i]) continue;
         if (app->characterData.isGLB[i])
         {
             TransformDataSampleFrameGLB(&app->characterData.xformData[i], &app->characterData.glbData[i], app->scrubberSettings.playTime, app->characterData.scales[i]);
@@ -181,6 +182,7 @@ void ApplicationUpdate(void* voidApplicationState)
     CapsuleDataReset(&app->capsuleData);
     for (int i = 0; i < app->characterData.count; i++)
     {
+        if (!app->characterData.visible[i]) continue;
         CapsuleDataAppendFromTransformData(&app->capsuleData, &app->characterData.xformData[i], app->characterData.radii[i], app->characterData.colors[i], app->characterData.opacities[i], !app->renderSettings.drawEndSites);
     }
 
@@ -273,6 +275,7 @@ void ApplicationUpdate(void* voidApplicationState)
         SetShaderValue(app->shader, app->uniforms.shadowCapsuleCount, &meshOccluderCount, SHADER_UNIFORM_INT);
         for (int i = 0; i < app->characterData.count; i++)
         {
+            if (!app->characterData.visible[i]) continue;
             if (!app->characterData.isGLB[i]) continue;
             GLBData* glb = &app->characterData.glbData[i];
             if (glb->model.meshCount == 0) continue;
@@ -370,12 +373,18 @@ void ApplicationUpdate(void* voidApplicationState)
     if (app->renderSettings.drawSkeleton)
     {
         for (int i = 0; i < app->characterData.count; i++)
+        {
+            if (!app->characterData.visible[i]) continue;
             DrawSkeleton(&app->characterData.xformData[i], app->renderSettings.drawEndSites, DARKGRAY, GRAY, (i == app->characterData.active) ? app->camera.selectedBone : -1);
+        }
     }
     if (app->renderSettings.drawTransforms)
     {
         for (int i = 0; i < app->characterData.count; i++)
+        {
+            if (!app->characterData.visible[i]) continue;
             DrawTransforms(&app->characterData.xformData[i]);
+        }
     }
 
     rlDrawRenderBatchActive();
