@@ -52,6 +52,13 @@ void TransformDataFree(TransformData* data)
     free(data->localRotations);
     free(data->globalPositions);
     free(data->globalRotations);
+    data->jointCount = 0;
+    data->parents = NULL;
+    data->endSite = NULL;
+    data->localPositions = NULL;
+    data->localRotations = NULL;
+    data->globalPositions = NULL;
+    data->globalRotations = NULL;
 }
 
 void TransformDataSampleFrame(TransformData* data, BVHData* bvh, int frame, float scale)

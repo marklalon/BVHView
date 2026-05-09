@@ -62,6 +62,150 @@ void OrbitCameraUpdate(OrbitCamera* camera, Vector3 target, float azimuthDelta, 
     camera->cam3d.position = eye;
 }
 
+// Extract the directory portion from a file path
+static void ExtractDirectory(const char* path, char* dir, int dirSize)
+{
+    // Find last path separator directly on the input
+    const char* lastSep = NULL;
+    for (const char* p = path; *p; p++)
+    {
+        if (*p == '/' || *p == '\\')
+            lastSep = p;
+    }
+    if (lastSep != NULL)
+    {
+        int len = (int)(lastSep - path);
+        if (len >= dirSize) len = dirSize - 1;
+        memcpy(dir, path, len);
+        dir[len] = '\0';
+    }
+    else
+    {
+        snprintf(dir, dirSize, ".");
+    }
+}
+
+// Free the file list (preserves index for rebuild)
+static void FreeFileList(ApplicationState* app)
+{
+    for (int i = 0; i < app->fileListCount; i++)
+    {
+        free(app->fileList[i]);
+        app->fileList[i] = NULL;
+    }
+    app->fileListCount = 0;
+}
+
+// Build sorted file list of .bvh/.glb/.gltf files in the directory of the given path.
+// Skips scanning if the directory hasn't changed since the last call.
+static void BuildFileList(ApplicationState* app, const char* currentFilePath)
+{
+    char dir[512];
+    ExtractDirectory(currentFilePath, dir, sizeof(dir));
+
+    // If directory is the same as last scanned, just find current index and return
+    if (app->lastScannedDir[0] != '\0' && strcmp(dir, app->lastScannedDir) == 0)
+    {
+        // Find current file index in existing list
+        for (int i = 0; i < app->fileListCount; i++)
+        {
+            if (strcmp(app->fileList[i], currentFilePath) == 0)
+            {
+                app->fileListIndex = i;
+                return;
+            }
+        }
+        // If not found (shouldn't happen), keep current index
+        return;
+    }
+
+    // Free previous list before scanning new directory
+    FreeFileList(app);
+
+    // Save current directory
+    snprintf(app->lastScannedDir, sizeof(app->lastScannedDir), "%s", dir);
+
+    // Scan directory
+    FilePathList files = LoadDirectoryFiles(dir);
+    if (files.count <= 0)
+    {
+        UnloadDirectoryFiles(files);
+        return;
+    }
+
+    // Collect matching files into a temporary array
+    char* matched[4096];
+    int matchedCount = 0;
+
+    for (int i = 0; i < files.count && matchedCount < 4096; i++)
+    {
+        const char* fullPath = files.paths[i];  // LoadDirectoryFiles returns full paths
+        const char* name = ExtractFilename(fullPath);
+        const char* ext = strrchr(name, '.');
+        if (ext && (strcmp(ext, ".bvh") == 0 || strcmp(ext, ".BVH") == 0 ||
+                    strcmp(ext, ".glb") == 0 || strcmp(ext, ".GLB") == 0 ||
+                    strcmp(ext, ".gltf") == 0 || strcmp(ext, ".GLTF") == 0))
+        {
+            // Use the full path directly from LoadDirectoryFiles
+            matched[matchedCount] = strdup(fullPath);
+            matchedCount++;
+        }
+    }
+
+    UnloadDirectoryFiles(files);
+
+    if (matchedCount <= 1)
+    {
+        // Not enough files to switch; free and clear
+        for (int i = 0; i < matchedCount; i++) free(matched[i]);
+        app->lastScannedDir[0] = '\0';
+        return;
+    }
+
+    // Sort by filename (case-insensitive)
+    for (int i = 0; i < matchedCount - 1; i++)
+    {
+        for (int j = i + 1; j < matchedCount; j++)
+        {
+            const char* nameI = ExtractFilename(matched[i]);
+            const char* nameJ = ExtractFilename(matched[j]);
+            if (stricmp(nameI, nameJ) > 0)
+            {
+                char* tmp = matched[i];
+                matched[i] = matched[j];
+                matched[j] = tmp;
+            }
+        }
+    }
+
+    // Transfer to app->fileList and find current index
+    for (int i = 0; i < matchedCount; i++)
+    {
+        app->fileList[i] = matched[i];
+        if (strcmp(app->fileList[i], currentFilePath) == 0)
+            app->fileListIndex = i;
+    }
+    app->fileListCount = matchedCount;
+}
+
+// Common post-load initialization: set active, update capsules, scrubber, window title, build file list
+void OnFileLoaded(ApplicationState* app)
+{
+    app->characterData.active = app->characterData.count - 1;
+    if (app->characterData.hasSkinnedMesh)
+    {
+        app->renderSettings.drawMeshes = true;
+        app->renderSettings.drawCapsules = false;
+    }
+    CapsuleDataUpdateForCharacters(&app->capsuleData, &app->characterData);
+    ScrubberSettingsRecomputeLimits(&app->scrubberSettings, &app->characterData);
+    ScrubberSettingsInitMaxs(&app->scrubberSettings, &app->characterData);
+    char windowTitle[528];
+    snprintf(windowTitle, sizeof(windowTitle), "%s - BVHView", app->characterData.filePaths[app->characterData.active]);
+    SetWindowTitle(windowTitle);
+    BuildFileList(app, app->characterData.filePaths[app->characterData.active]);
+}
+
 void ApplicationUpdate(void* voidApplicationState)
 {
     ApplicationState* app = voidApplicationState;
@@ -75,14 +219,7 @@ void ApplicationUpdate(void* voidApplicationState)
             snprintf(fileNameToLoad, sizeof(fileNameToLoad), "%s/%s", app->fileDialogState.dirPathText, app->fileDialogState.fileNameText);
             if (CharacterDataLoadFromFile(&app->characterData, fileNameToLoad, app->errMsg, 512))
             {
-                app->characterData.active = app->characterData.count - 1;
-                if (app->characterData.hasSkinnedMesh) { app->renderSettings.drawMeshes = true; app->renderSettings.drawCapsules = false; }
-                CapsuleDataUpdateForCharacters(&app->capsuleData, &app->characterData);
-                ScrubberSettingsRecomputeLimits(&app->scrubberSettings, &app->characterData);
-                ScrubberSettingsInitMaxs(&app->scrubberSettings, &app->characterData);
-                char windowTitle[528];
-                snprintf(windowTitle, sizeof(windowTitle), "%s - BVHView", app->characterData.filePaths[app->characterData.active]);
-                SetWindowTitle(windowTitle);
+                OnFileLoaded(app);
             }
         }
         else snprintf(app->errMsg, 512, "Error: File '%.*s' is not a supported animation file (.bvh, .glb, .gltf).", 400, app->fileDialogState.fileNameText);
@@ -102,19 +239,57 @@ void ApplicationUpdate(void* voidApplicationState)
         UnloadDroppedFiles(droppedFiles);
         if (app->characterData.count > prevBvhCount)
         {
-            if (app->characterData.hasSkinnedMesh) { app->renderSettings.drawMeshes = true; app->renderSettings.drawCapsules = false; }
-            CapsuleDataUpdateForCharacters(&app->capsuleData, &app->characterData);
-            ScrubberSettingsRecomputeLimits(&app->scrubberSettings, &app->characterData);
-            ScrubberSettingsInitMaxs(&app->scrubberSettings, &app->characterData);
-            char windowTitle[528];
-            snprintf(windowTitle, sizeof(windowTitle), "%s - BVHView", app->characterData.filePaths[app->characterData.active]);
-            SetWindowTitle(windowTitle);
+            OnFileLoaded(app);
         }
     }
 
     // Process Key Presses
     if (IsKeyPressed(KEY_H) && !app->fileDialogState.windowActive)
         app->renderSettings.drawUI = !app->renderSettings.drawUI;
+
+    // PageUp/PageDown: switch to previous/next file in the same directory
+    if (!app->fileDialogState.windowActive && app->fileListCount > 1)
+    {
+        int direction = 0;
+        if (IsKeyPressed(KEY_PAGE_UP)) direction = -1;
+        else if (IsKeyPressed(KEY_PAGE_DOWN)) direction = 1;
+
+        if (direction != 0)
+        {
+            int startIndex = app->fileListIndex;
+
+            // Save the absolute camera view before switching.
+            app->savedCamPos = app->camera.cam3d.position;
+            app->savedCamTarget = app->camera.cam3d.target;
+            app->restoreCameraAfterSwitch = true;
+
+            // Try candidate files in the requested direction, skipping ones that fail.
+            bool loaded = false;
+            for (int attempt = 1; attempt < app->fileListCount; attempt++)
+            {
+                int candidate = (startIndex + direction * attempt + app->fileListCount) % app->fileListCount;
+
+                CharacterDataFree(&app->characterData);
+                if (CharacterDataLoadFromFile(&app->characterData, app->fileList[candidate], app->errMsg, 512))
+                {
+                    app->fileListIndex = candidate;
+                    loaded = true;
+                    OnFileLoaded(app);
+                    break;
+                }
+            }
+
+            // If nothing else could be loaded, restore the current file and cancel camera restore.
+            if (!loaded)
+            {
+                app->fileListIndex = startIndex;
+                app->restoreCameraAfterSwitch = false;
+                CharacterDataFree(&app->characterData);
+                if (CharacterDataLoadFromFile(&app->characterData, app->fileList[startIndex], app->errMsg, 512))
+                    OnFileLoaded(app);
+            }
+        }
+    }
 
     PROFILE_BEGIN(Update);
 
@@ -176,6 +351,16 @@ void ApplicationUpdate(void* voidApplicationState)
             if (CheckCollisionPointRec(GetMousePosition(), skeletonPanel)) mouseWheel = 0.0f;
         }
         OrbitCameraUpdate(&app->camera, cameraTarget, (middleDown && !shiftHeld) ? GetMouseDelta().x : 0.0f, (middleDown && !shiftHeld) ? GetMouseDelta().y : 0.0f, (middleDown && shiftHeld) ? -GetMouseDelta().x : 0.0f, (middleDown && shiftHeld) ? -GetMouseDelta().y : 0.0f, mouseWheel, GetFrameTime());
+    }
+
+    // Restore camera position after file switch (after OrbitCameraUpdate has run)
+    if (app->restoreCameraAfterSwitch)
+    {
+        // Recompute offset so future frames maintain the saved view
+        app->camera.offset = Vector3Subtract(app->savedCamTarget, cameraTarget);
+        app->camera.cam3d.position = app->savedCamPos;
+        app->camera.cam3d.target = app->savedCamTarget;
+        app->restoreCameraAfterSwitch = false;
     }
 
     // Create Capsules

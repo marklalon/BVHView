@@ -37,8 +37,20 @@ typedef struct ApplicationState {
     RenderSettings renderSettings;
     GuiWindowFileDialogState fileDialogState;
     char errMsg[512];
+
+    // PageUp/PageDown file switching
+    char* fileList[4096];
+    int fileListCount;
+    int fileListIndex;
+    char lastScannedDir[512];
+
+    // Camera preservation across file switch
+    bool restoreCameraAfterSwitch;
+    Vector3 savedCamPos;
+    Vector3 savedCamTarget;
 } ApplicationState;
 
 void ApplicationUpdate(void* voidApplicationState);
+void OnFileLoaded(ApplicationState* app);
 
 #endif // APP_H

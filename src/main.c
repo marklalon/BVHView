@@ -60,6 +60,10 @@ int main(int argc, char** argv)
 
     app.fileDialogState = InitGuiWindowFileDialog(GetWorkingDirectory());
     app.errMsg[0] = '\0';
+    app.fileListCount = 0;
+    app.fileListIndex = 0;
+    app.lastScannedDir[0] = '\0';
+    app.restoreCameraAfterSwitch = false;
 
     for (int i = 1; i < argc; i++)
     {
@@ -69,14 +73,7 @@ int main(int argc, char** argv)
 
     if (app.characterData.count > 0)
     {
-        app.characterData.active = app.characterData.count - 1;
-        if (app.characterData.hasSkinnedMesh) { app.renderSettings.drawMeshes = true; app.renderSettings.drawCapsules = false; }
-        CapsuleDataUpdateForCharacters(&app.capsuleData, &app.characterData);
-        ScrubberSettingsRecomputeLimits(&app.scrubberSettings, &app.characterData);
-        ScrubberSettingsInitMaxs(&app.scrubberSettings, &app.characterData);
-        char windowTitle[528];
-        snprintf(windowTitle, sizeof(windowTitle), "%s - BVHView", app.characterData.filePaths[app.characterData.active]);
-        SetWindowTitle(windowTitle);
+        OnFileLoaded(&app);
     }
 
 #if defined(PLATFORM_WEB)

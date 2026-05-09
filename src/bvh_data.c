@@ -32,6 +32,7 @@ void BVHJointDataRename(BVHJointData* data, const char* name)
 void BVHJointDataFree(BVHJointData* data)
 {
     free(data->name);
+    data->name = NULL;
 }
 
 void BVHDataInit(BVHData* bvh)
@@ -52,6 +53,12 @@ void BVHDataFree(BVHData* bvh)
     }
     free(bvh->joints);
     free(bvh->motionData);
+    bvh->jointCount = 0;
+    bvh->joints = NULL;
+    bvh->frameCount = 0;
+    bvh->channelCount = 0;
+    bvh->frameTime = 0.0f;
+    bvh->motionData = NULL;
 }
 
 int BVHDataAddJoint(BVHData* bvh)

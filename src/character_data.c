@@ -84,7 +84,15 @@ void CharacterDataFree(CharacterData* data)
         TransformDataFree(&data->xformTmp2[i]);
         TransformDataFree(&data->xformTmp3[i]);
         free(data->jointNamesCombo[i]);
+        data->jointNamesCombo[i] = NULL;
+        data->filePaths[i][0] = '\0';
+        data->names[i][0] = '\0';
+        data->isGLB[i] = false;
+        data->visible[i] = true;
     }
+    data->count = 0;
+    data->active = 0;
+    data->hasSkinnedMesh = false;
 }
 
 bool CharacterDataLoadFromFile(CharacterData* data, const char* path, char* errMsg, int errMsgSize)
