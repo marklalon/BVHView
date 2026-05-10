@@ -103,6 +103,26 @@ static void FreeFileList(ApplicationState* app)
     app->groupCount = 0;
 }
 
+// Return the raw bone name (without leading spaces) for the currently selected bone,
+// or NULL if there is no valid selection.
+static const char* GetSelectedBoneName(CharacterData* characterData, int selectedBone)
+{
+    int ci = characterData->active;
+    if (ci < 0 || ci >= characterData->count) return NULL;
+    if (selectedBone < 0 || selectedBone >= characterData->xformData[ci].jointCount) return NULL;
+
+    if (characterData->isGLB[ci])
+    {
+        GLBData* glb = &characterData->glbData[ci];
+        int origIdx = glb->topoOrder[selectedBone];
+        return glb->model.skeleton.bones[origIdx].name;
+    }
+    else
+    {
+        return characterData->bvhData[ci].joints[selectedBone].name;
+    }
+}
+
 void ApplicationCleanup(ApplicationState* app)
 {
     FreeFileList(app);
@@ -319,6 +339,16 @@ void ApplicationUpdate(void* voidApplicationState)
     // Process Key Presses
     if (IsKeyPressed(KEY_H) && !app->fileDialogState.windowActive)
         app->renderSettings.drawUI = !app->renderSettings.drawUI;
+
+    // Ctrl+C: copy selected bone name (without leading spaces) to clipboard
+    if (!app->fileDialogState.windowActive && IsKeyPressed(KEY_C) && (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)))
+    {
+        const char* boneName = GetSelectedBoneName(&app->characterData, app->camera.selectedBone);
+        if (boneName != NULL)
+        {
+            SetClipboardText(boneName);
+        }
+    }
 
     // ArrowUp/ArrowDown: switch to previous/next file in the same directory
     if (!app->fileDialogState.windowActive && app->fileListCount > 1)
