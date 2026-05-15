@@ -26,6 +26,47 @@
 #define RAYGUI_IMPLEMENTATION
 #include "raygui.h"
 
+// Shared key-repeat state for keys that should repeat when held
+typedef struct {
+    int lastPressedKey;
+    double pressTime;
+    int repeatCount;
+} KeyRepeatState;
+
+// Returns true if a key-press action should fire (initial press or timed repeat).
+// Use IsKeyDown to check if the key is held, then call this to gate the action.
+static bool KeyRepeatShouldFire(KeyRepeatState* state, int key)
+{
+    if (key != state->lastPressedKey)
+    {
+        // New key press: fire immediately
+        state->lastPressedKey = key;
+        state->repeatCount = 0;
+        state->pressTime = GetTime();
+        return true;
+    }
+    // Key still held: repeat using standard Windows key-repeat timing
+    double now = GetTime();
+    double elapsed = now - state->pressTime;
+    double initialDelay = 0.400;
+    double repeatInterval = 0.100;
+    double interval = (state->repeatCount == 0) ? initialDelay : repeatInterval;
+
+    if (elapsed >= interval)
+    {
+        state->pressTime = now;
+        state->repeatCount++;
+        return true;
+    }
+    return false;
+}
+
+static void KeyRepeatReset(KeyRepeatState* state)
+{
+    state->lastPressedKey = -1;
+    state->repeatCount = 0;
+}
+
 void OrbitCameraInit(OrbitCamera* camera, int argc, char** argv)
 {
     memset(&camera->cam3d, 0, sizeof(Camera3D));
@@ -47,8 +88,8 @@ void OrbitCameraInit(OrbitCamera* camera, int argc, char** argv)
 void OrbitCameraUpdate(OrbitCamera* camera, Vector3 target, float azimuthDelta, float altitudeDelta, float offsetDeltaX, float offsetDeltaY, float mouseWheel, float dt)
 {
     camera->azimuth = camera->azimuth + 1.0f * dt * -azimuthDelta;
-    camera->altitude = Clamp(camera->altitude + 1.0f * dt * altitudeDelta, 0.0, 0.4f * PI);
-    camera->distance = Clamp(camera->distance + 40.0f * dt * -mouseWheel, 0.1f, 100.0f);
+    camera->altitude = Clamp(camera->altitude + 1.0f * dt * altitudeDelta, -0.2 * PI, 0.45f * PI);
+    camera->distance = Clamp(camera->distance + 50.0f * dt * -mouseWheel, 0.1f, 100.0f);
     Quaternion rotationAzimuth = QuaternionFromAxisAngle((Vector3){0, 1, 0}, camera->azimuth);
     Vector3 position = Vector3RotateByQuaternion((Vector3){0, 0, camera->distance}, rotationAzimuth);
     Vector3 axis = Vector3Normalize(Vector3CrossProduct(position, (Vector3){0, 1, 0}));
@@ -350,83 +391,159 @@ void ApplicationUpdate(void* voidApplicationState)
         }
     }
 
-    // ArrowUp/ArrowDown: switch to previous/next file in the same directory
+    // Space: toggle play/pause
+    if (!app->fileDialogState.windowActive && IsKeyPressed(KEY_SPACE))
+    {
+        app->scrubberSettings.playing = !app->scrubberSettings.playing;
+    }
+
+    // Tab: cycle active character
+    if (!app->fileDialogState.windowActive && IsKeyPressed(KEY_TAB) && app->characterData.count > 1)
+    {
+        int next = app->characterData.active + 1;
+        if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT))
+            next = app->characterData.active - 1;
+        if (next < 0) next = app->characterData.count - 1;
+        if (next >= app->characterData.count) next = 0;
+        app->characterData.active = next;
+        ScrubberSettingsClamp(&app->scrubberSettings, &app->characterData);
+        char windowTitle[528];
+        snprintf(windowTitle, sizeof(windowTitle), "%s - BVHView", app->characterData.filePaths[app->characterData.active]);
+        SetWindowTitle(windowTitle);
+    }
+
+    // ArrowLeft/ArrowRight: switch to previous/next file in the same directory (repeat when held)
     if (!app->fileDialogState.windowActive && app->fileListCount > 1)
     {
+        static KeyRepeatState repeatState = { -1, 0.0, 0 };
+
         int direction = 0;
-        if (IsKeyPressed(KEY_UP)) direction = -1;
-        else if (IsKeyPressed(KEY_DOWN)) direction = 1;
+        int currentKey = -1;
+        if (IsKeyDown(KEY_LEFT)) { direction = -1; currentKey = KEY_LEFT; }
+        else if (IsKeyDown(KEY_RIGHT)) { direction = 1; currentKey = KEY_RIGHT; }
 
         if (direction != 0)
         {
-            int startIndex = app->fileListIndex;
-
-            // Save the absolute camera view before switching.
-            app->savedCamPos = app->camera.cam3d.position;
-            app->savedCamTarget = app->camera.cam3d.target;
-            app->restoreCameraAfterSwitch = true;
-
-            // Try candidate files in the requested direction, skipping ones that fail.
-            bool loaded = false;
-            for (int attempt = 1; attempt < app->fileListCount; attempt++)
+            if (KeyRepeatShouldFire(&repeatState, currentKey))
             {
-                int candidate = (startIndex + direction * attempt + app->fileListCount) % app->fileListCount;
+                int startIndex = app->fileListIndex;
 
-                CharacterDataFree(&app->characterData);
-                if (CharacterDataLoadFromFile(&app->characterData, app->fileList[candidate], app->errMsg, 512))
+                // Save the absolute camera view before switching.
+                app->savedCamPos = app->camera.cam3d.position;
+                app->savedCamTarget = app->camera.cam3d.target;
+                app->restoreCameraAfterSwitch = true;
+
+                // Try candidate files in the requested direction, skipping ones that fail.
+                bool loaded = false;
+                for (int attempt = 1; attempt < app->fileListCount; attempt++)
                 {
-                    app->fileListIndex = candidate;
-                    loaded = true;
-                    OnFileLoaded(app);
-                    break;
+                    int candidate = (startIndex + direction * attempt + app->fileListCount) % app->fileListCount;
+
+                    CharacterDataFree(&app->characterData);
+                    if (CharacterDataLoadFromFile(&app->characterData, app->fileList[candidate], app->errMsg, 512))
+                    {
+                        app->fileListIndex = candidate;
+                        loaded = true;
+                        OnFileLoaded(app);
+                        break;
+                    }
+                }
+
+                // If nothing else could be loaded, restore the current file and cancel camera restore.
+                if (!loaded)
+                {
+                    app->fileListIndex = startIndex;
+                    app->restoreCameraAfterSwitch = false;
+                    CharacterDataFree(&app->characterData);
+                    if (CharacterDataLoadFromFile(&app->characterData, app->fileList[startIndex], app->errMsg, 512))
+                        OnFileLoaded(app);
                 }
             }
+        }
+        else
+        {
+            KeyRepeatReset(&repeatState);
+        }
+    }
 
-            // If nothing else could be loaded, restore the current file and cancel camera restore.
-            if (!loaded)
+    // ArrowUp/ArrowDown: switch selected bone in skeleton (repeat when held)
+    if (!app->fileDialogState.windowActive && app->characterData.count > 0)
+    {
+        int ci = app->characterData.active;
+        int jointCount = app->characterData.xformData[ci].jointCount;
+
+        if (jointCount > 1)
+        {
+            static KeyRepeatState repeatState = { -1, 0.0, 0 };
+
+            int direction = 0;
+            int currentKey = -1;
+            if (IsKeyDown(KEY_UP)) { direction = -1; currentKey = KEY_UP; }
+            else if (IsKeyDown(KEY_DOWN)) { direction = 1; currentKey = KEY_DOWN; }
+
+            if (direction != 0)
             {
-                app->fileListIndex = startIndex;
-                app->restoreCameraAfterSwitch = false;
-                CharacterDataFree(&app->characterData);
-                if (CharacterDataLoadFromFile(&app->characterData, app->fileList[startIndex], app->errMsg, 512))
-                    OnFileLoaded(app);
+                if (KeyRepeatShouldFire(&repeatState, currentKey))
+                {
+                    app->camera.selectedBone += direction;
+                    if (app->camera.selectedBone < 0)
+                        app->camera.selectedBone = jointCount - 1;
+                    if (app->camera.selectedBone >= jointCount)
+                        app->camera.selectedBone = 0;
+                    if (app->camera.track)
+                        app->camera.trackBone = app->camera.selectedBone;
+                }
+            }
+            else
+            {
+                KeyRepeatReset(&repeatState);
             }
         }
     }
 
-    // PageUp/PageDown: switch to previous/next group (jump to first file of each group)
+    // PageUp/PageDown: switch to previous/next group (jump to first file of each group, repeat when held)
     if (!app->fileDialogState.windowActive && app->groupCount > 1)
     {
+        static KeyRepeatState repeatState = { -1, 0.0, 0 };
+
         int direction = 0;
-        if (IsKeyPressed(KEY_PAGE_UP)) direction = -1;
-        else if (IsKeyPressed(KEY_PAGE_DOWN)) direction = 1;
+        int currentKey = -1;
+        if (IsKeyDown(KEY_PAGE_UP)) { direction = -1; currentKey = KEY_PAGE_UP; }
+        else if (IsKeyDown(KEY_PAGE_DOWN)) { direction = 1; currentKey = KEY_PAGE_DOWN; }
 
         if (direction != 0)
         {
-            int targetGroup = (app->currentGroupIndex + direction + app->groupCount) % app->groupCount;
-            int targetIndex = app->groupStartIndex[targetGroup];
-
-            // Save the absolute camera view before switching.
-            app->savedCamPos = app->camera.cam3d.position;
-            app->savedCamTarget = app->camera.cam3d.target;
-            app->restoreCameraAfterSwitch = true;
-
-            CharacterDataFree(&app->characterData);
-            if (CharacterDataLoadFromFile(&app->characterData, app->fileList[targetIndex], app->errMsg, 512))
+            if (KeyRepeatShouldFire(&repeatState, currentKey))
             {
-                app->fileListIndex = targetIndex;
-                app->currentGroupIndex = targetGroup;
-                OnFileLoaded(app);
-            }
-            else
-            {
-                // Fallback: restore current file
-                app->restoreCameraAfterSwitch = false;
+                int targetGroup = (app->currentGroupIndex + direction + app->groupCount) % app->groupCount;
+                int targetIndex = app->groupStartIndex[targetGroup];
+
+                // Save the absolute camera view before switching.
+                app->savedCamPos = app->camera.cam3d.position;
+                app->savedCamTarget = app->camera.cam3d.target;
+                app->restoreCameraAfterSwitch = true;
+
                 CharacterDataFree(&app->characterData);
-                int startIndex = app->fileListIndex;
-                if (CharacterDataLoadFromFile(&app->characterData, app->fileList[startIndex], app->errMsg, 512))
+                if (CharacterDataLoadFromFile(&app->characterData, app->fileList[targetIndex], app->errMsg, 512))
+                {
+                    app->fileListIndex = targetIndex;
+                    app->currentGroupIndex = targetGroup;
                     OnFileLoaded(app);
+                }
+                else
+                {
+                    // Fallback: restore current file
+                    app->restoreCameraAfterSwitch = false;
+                    CharacterDataFree(&app->characterData);
+                    int startIndex = app->fileListIndex;
+                    if (CharacterDataLoadFromFile(&app->characterData, app->fileList[startIndex], app->errMsg, 512))
+                        OnFileLoaded(app);
+                }
             }
+        }
+        else
+        {
+            KeyRepeatReset(&repeatState);
         }
     }
 

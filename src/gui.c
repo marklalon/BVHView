@@ -259,8 +259,11 @@ void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterData, int argc,
         if (ci >= 0 && ci < characterData->count)
         {
             int jointCount = characterData->xformData[ci].jointCount;
+            int sel = camera->selectedBone;
+            if (sel < 0) sel = 0;
+            if (sel >= jointCount) sel = jointCount - 1;
             char jointText[32];
-            snprintf(jointText, sizeof(jointText), "%d", jointCount);
+            snprintf(jointText, sizeof(jointText), "%d/%d", sel + 1, jointCount);
             DrawText(jointText, 135, 255, 10, (Color){ 153, 153, 153, 255 });
         }
         if (ci >= 0 && ci < characterData->count && camera->selectedBone >= 0 && camera->selectedBone < characterData->xformData[ci].jointCount)
