@@ -232,16 +232,13 @@ void GuiCustomGroupBox(Rectangle bounds, const char* text)
 
 void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterData, int argc, char** argv)
 {
-    GuiCustomGroupBox((Rectangle){ 20, 10, 190, 290 }, "Camera");
-    GuiLabel((Rectangle){ 30, 30, 150, 20 }, "Ctrl + Left Click - Rotate");
-    GuiLabel((Rectangle){ 30, 50, 150, 20 }, "Ctrl + Right Click - Pan");
-    GuiLabel((Rectangle){ 30, 70, 150, 20 }, "Mouse Scroll - Zoom");
-    GuiLabel((Rectangle){ 30, 90, 150, 20 }, TextFormat("Target: [% 5.3f % 5.3f % 5.3f]", camera->cam3d.target.x, camera->cam3d.target.y, camera->cam3d.target.z));
-    GuiLabel((Rectangle){ 30, 110, 150, 20 }, TextFormat("Offset: [% 5.3f % 5.3f % 5.3f]", camera->offset.x, camera->offset.y, camera->offset.z));
-    GuiLabel((Rectangle){ 30, 130, 150, 20 }, TextFormat("Azimuth: %5.3f", camera->azimuth));
-    GuiLabel((Rectangle){ 30, 150, 150, 20 }, TextFormat("Altitude: %5.3f", camera->altitude));
-    GuiLabel((Rectangle){ 30, 170, 150, 20 }, TextFormat("Distance: %5.3f", camera->distance));
-    if (GuiButton((Rectangle){ 30, 190, 100, 20 }, "Reset"))
+    GuiCustomGroupBox((Rectangle){ 20, 10, 190, 240 }, "Camera");
+    GuiLabel((Rectangle){ 30, 30, 150, 20 }, TextFormat("Target: [% 5.3f % 5.3f % 5.3f]", camera->cam3d.target.x, camera->cam3d.target.y, camera->cam3d.target.z));
+    GuiLabel((Rectangle){ 30, 50, 150, 20 }, TextFormat("Offset: [% 5.3f % 5.3f % 5.3f]", camera->offset.x, camera->offset.y, camera->offset.z));
+    GuiLabel((Rectangle){ 30, 70, 150, 20 }, TextFormat("Azimuth: %5.3f", camera->azimuth));
+    GuiLabel((Rectangle){ 30, 90, 150, 20 }, TextFormat("Altitude: %5.3f", camera->altitude));
+    GuiLabel((Rectangle){ 30, 110, 150, 20 }, TextFormat("Distance: %5.3f", camera->distance));
+    if (GuiButton((Rectangle){ 30, 130, 100, 20 }, "Reset"))
     {
         camera->azimuth = ArgFloat(argc, argv, "cameraAzimuth", 0.0f);
         camera->altitude = ArgFloat(argc, argv, "cameraAltitude", 0.4f);
@@ -252,9 +249,9 @@ void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterData, int argc,
     }
     if (characterData->count > 0)
     {
-        GuiToggle((Rectangle){ 30, 220, 100, 20 }, "Track", &camera->track);
+        GuiToggle((Rectangle){ 30, 160, 100, 20 }, "Track", &camera->track);
         bool skeletonToggle = camera->showSkeletonPanel;
-        GuiToggle((Rectangle){ 30, 250, 100, 20 }, "Skeleton", &skeletonToggle);
+        GuiToggle((Rectangle){ 30, 190, 100, 20 }, "Skeleton", &skeletonToggle);
         int ci = characterData->active;
         if (ci >= 0 && ci < characterData->count)
         {
@@ -264,14 +261,14 @@ void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterData, int argc,
             if (sel >= jointCount) sel = jointCount - 1;
             char jointText[32];
             snprintf(jointText, sizeof(jointText), "%d/%d", sel + 1, jointCount);
-            DrawText(jointText, 135, 255, 10, (Color){ 153, 153, 153, 255 });
+            DrawText(jointText, 135, 195, 10, (Color){ 153, 153, 153, 255 });
         }
         if (ci >= 0 && ci < characterData->count && camera->selectedBone >= 0 && camera->selectedBone < characterData->xformData[ci].jointCount)
         {
             const char* boneName = characterData->isGLB[ci]
                 ? characterData->glbData[ci].model.skeleton.bones[characterData->glbData[ci].topoOrder[camera->selectedBone]].name
                 : characterData->bvhData[ci].joints[camera->selectedBone].name;
-            DrawText(boneName, 50, 280, 10, GOLD);
+            DrawText(boneName, 50, 220, 10, GOLD);
         }
         if (skeletonToggle != camera->showSkeletonPanel)
         {
@@ -453,7 +450,7 @@ void GuiRenderSettings(RenderSettings* settings, CapsuleData* capsuleData, int s
 
 void GuiCharacterData(CharacterData* characterData, GuiWindowFileDialogState* fileDialogState, ScrubberSettings* scrubberSettings, char* errMsg, int argc, char** argv)
 {
-    int offsetHeight = 310;
+    int offsetHeight = 260;
     GuiCustomGroupBox((Rectangle){ 20, offsetHeight, 190, (CHARACTERS_MAX - 1) * 30 + 190 }, "Characters");
 #if !defined(PLATFORM_WEB)
     if (GuiButton((Rectangle){ 30, offsetHeight + 20, 110, 20 }, "Open"))
