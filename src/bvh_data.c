@@ -113,12 +113,16 @@ bool BVHParseJointName(BVHJointData* jnt, Parser* par)
     BVHParseWhitespace(par);
     char buffer[256];
     int chrnum = 0;
-    while (chrnum < 255 && ParserOneOf(par,
-        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_:-."))
+    while (chrnum < 255 && !ParserMatch(par, '\r') && !ParserMatch(par, '\n') && !ParserMatch(par, '\0'))
     {
         buffer[chrnum] = ParserPeek(par);
         chrnum++;
         ParserInc(par);
+    }
+
+    while (chrnum > 0 && strchr(" \t\v", buffer[chrnum - 1]) != NULL)
+    {
+        chrnum--;
     }
     buffer[chrnum] = '\0';
 
@@ -343,9 +347,10 @@ bool BVHDataLoad(BVHData* bvh, const char* filename, char* errMsg, int errMsgSiz
     fseek(f, 0, SEEK_END);
     long int length = ftell(f);
     fseek(f, 0, SEEK_SET);
-    char* buffer = malloc(length + 1);
+    char* buffer = malloc(length + 2);
     fread(buffer, 1, length, f);
     buffer[length] = '\n';
+    buffer[length + 1] = '\0';
     fclose(f);
 
     BVHDataFree(bvh);
