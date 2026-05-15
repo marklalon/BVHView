@@ -332,6 +332,8 @@ void GuiSkeletonPanel(OrbitCamera* camera, CharacterData* characterData, int scr
     if (visibleStart < 0) visibleStart = 0;
     BeginScissorMode((int)view.x, (int)view.y, (int)view.width, (int)view.height);
     Vector2 mouse = GetMousePosition();
+    int hoveredIndex = -1;
+    Rectangle hoveredItemRec = { 0, 0, 0, 0 };
     for (int i = visibleStart; i < jointCount && i < visibleStart + visibleCount; i++)
     {
         int depth = GetJointDepth(i, boneParents);
@@ -348,6 +350,11 @@ void GuiSkeletonPanel(OrbitCamera* camera, CharacterData* characterData, int scr
         displayName[pos] = '\0';
         Rectangle itemRec = { view.x, view.y + scroll.y + (float)(i * itemHeight), view.width, (float)itemHeight - 2 };
         bool isHovered = CheckCollisionPointRec(mouse, itemRec);
+        if (isHovered)
+        {
+            hoveredIndex = i;
+            hoveredItemRec = itemRec;
+        }
         if (i == camera->selectedBone)
         {
             DrawRectangleRec(itemRec, (Color){ 69, 70, 73, 255 });
@@ -364,6 +371,55 @@ void GuiSkeletonPanel(OrbitCamera* camera, CharacterData* characterData, int scr
         }
     }
     EndScissorMode();
+
+    // Tooltip: show full bone path on hover (drawn outside scissor so it's not clipped)
+    if (hoveredIndex >= 0)
+    {
+        static char pathBuf[512];
+        pathBuf[0] = '\0';
+        int pathLen = 0;
+
+        // Collect indices from leaf to root
+        int tempPath[64];
+        int depth = 0;
+        int idx = hoveredIndex;
+        while (depth < 64)
+        {
+            tempPath[depth++] = idx;
+            int parent = boneParents[idx];
+            if (parent < 0) break;
+            idx = parent;
+        }
+
+        // Build path string from root to leaf
+        for (int p = depth - 1; p >= 0; p--)
+        {
+            if (p < depth - 1 && pathLen < 509)
+                pathBuf[pathLen++] = '/';
+            const char* nm = names[tempPath[p]];
+            int nLen = (int)strlen(nm);
+            if (pathLen + nLen >= 510) nLen = 510 - pathLen;
+            memcpy(pathBuf + pathLen, nm, nLen);
+            pathLen += nLen;
+        }
+        pathBuf[pathLen] = '\0';
+
+        int textWidth = MeasureText(pathBuf, 10);
+        float tooltipX = hoveredItemRec.x + hoveredItemRec.width + 8;
+        float tooltipY = hoveredItemRec.y;
+        int tooltipW = textWidth + 10;
+
+        // Keep tooltip within screen bounds
+        if (tooltipX + tooltipW > (float)screenWidth)
+            tooltipX = hoveredItemRec.x - (float)(textWidth + 10);
+        if (tooltipY < 0) tooltipY = 0;
+        if (tooltipY + 24 > (float)screenHeight) tooltipY = (float)screenHeight - 24;
+
+        Rectangle tooltipRect = { tooltipX, tooltipY, (float)tooltipW, 22 };
+        DrawRectangleRec(tooltipRect, (Color){ 40, 40, 40, 230 });
+        DrawRectangleLinesEx(tooltipRect, 1, (Color){ 140, 140, 143, 255 });
+        DrawText(pathBuf, (int)tooltipRect.x + 5, (int)tooltipRect.y + 6, 10, LIGHTGRAY);
+    }
 }
 
 void GuiRenderSettings(RenderSettings* settings, CapsuleData* capsuleData, int screenWidth, int screenHeight)
