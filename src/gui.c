@@ -596,8 +596,55 @@ void GuiScrubberSettings(ScrubberSettings* settings, CharacterData* characterDat
     Rectangle sliderRect = { screenWidth / 2 - 540, screenHeight - 50, 1080, 20 };
     float frameFloatPrev = settings->frameSnap ? (float)frame : settings->playTime / frameTime;
     float frameFloat = frameFloatPrev;
-    GuiSliderBar(sliderRect, TextFormat("%5.2f", settings->playTime), TextFormat("%i", frame), &frameFloat, (float)settings->frameMin, (float)settings->frameMax);
-    if (frameFloat != frameFloatPrev)
+
+    static bool scrubberDragging = false;
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(GetMousePosition(), sliderRect)) scrubberDragging = true;
+    if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) scrubberDragging = false;
+
+    bool wrapped = false;
+    float wrappedValue = frameFloat;
+    if (scrubberDragging && settings->looping)
+    {
+        float mouseX = GetMousePosition().x;
+        if (mouseX < sliderRect.x || mouseX > sliderRect.x + sliderRect.width)
+        {
+            float range = (float)settings->frameMax - (float)settings->frameMin;
+            if (range > 0.0f)
+            {
+                float t = (mouseX - sliderRect.x) / sliderRect.width;
+                float raw = t * range;
+                float w = fmodf(fmodf(raw, range) + range, range);
+                wrappedValue = (float)settings->frameMin + w;
+                wrapped = true;
+            }
+        }
+    }
+
+    int displayFrame = wrapped ? ClampInt((int)(wrappedValue + 0.5f), settings->frameMin, settings->frameMax) : frame;
+    float displayPlayTime = wrapped ? wrappedValue * frameTime : settings->playTime;
+
+    GuiSliderBar(sliderRect, TextFormat("%5.2f", displayPlayTime), TextFormat("%i", displayFrame), &frameFloat, (float)settings->frameMin, (float)settings->frameMax);
+
+    if (wrapped)
+    {
+        frameFloat = wrappedValue;
+        int bw = GuiGetStyle(SLIDER, BORDER_WIDTH);
+        int sp = GuiGetStyle(SLIDER, SLIDER_PADDING);
+        Color baseColor = GetColor(GuiGetStyle(SLIDER, BASE_COLOR_NORMAL));
+        Color fillColor = GetColor(GuiGetStyle(SLIDER, TEXT_COLOR_PRESSED));
+        Rectangle inner = {
+            sliderRect.x + bw,
+            sliderRect.y + bw + sp,
+            sliderRect.width - 2 * bw,
+            sliderRect.height - 2 * bw - 2 * sp
+        };
+        DrawRectangleRec(inner, baseColor);
+        float range = (float)settings->frameMax - (float)settings->frameMin;
+        float frac = (wrappedValue - (float)settings->frameMin) / range;
+        DrawRectangleRec((Rectangle){ inner.x, inner.y, frac * inner.width, inner.height }, fillColor);
+    }
+
+    if (frameFloat != frameFloatPrev || wrapped)
     {
         settings->playing = false;
         if (settings->frameSnap)
