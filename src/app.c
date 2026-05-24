@@ -412,8 +412,9 @@ void ApplicationUpdate(void* voidApplicationState)
         SetWindowTitle(windowTitle);
     }
 
-    // ArrowLeft/ArrowRight: switch to previous/next file in the same directory (repeat when held)
-    if (!app->fileDialogState.windowActive && app->fileListCount > 1)
+    // ArrowLeft/ArrowRight: replace the active character with the previous/next
+    // file in *its own* directory, leaving other characters untouched.
+    if (!app->fileDialogState.windowActive && app->characterData.count > 0)
     {
         static KeyRepeatState repeatState = { -1, 0.0, 0 };
 
@@ -426,37 +427,57 @@ void ApplicationUpdate(void* voidApplicationState)
         {
             if (KeyRepeatShouldFire(&repeatState, currentKey))
             {
-                int startIndex = app->fileListIndex;
+                int activeSlot = app->characterData.active;
 
-                // Save the absolute camera view before switching.
-                app->savedCamPos = app->camera.cam3d.position;
-                app->savedCamTarget = app->camera.cam3d.target;
-                app->restoreCameraAfterSwitch = true;
+                // Refresh the file list to the active character's directory (no-op if unchanged).
+                BuildFileList(app, app->characterData.filePaths[activeSlot]);
 
-                // Try candidate files in the requested direction, skipping ones that fail.
-                bool loaded = false;
-                for (int attempt = 1; attempt < app->fileListCount; attempt++)
+                if (app->fileListCount > 1)
                 {
-                    int candidate = (startIndex + direction * attempt + app->fileListCount) % app->fileListCount;
+                    int startIndex = app->fileListIndex;
 
-                    CharacterDataFree(&app->characterData);
-                    if (CharacterDataLoadFromFile(&app->characterData, app->fileList[candidate], app->errMsg, 512))
+                    // Save the absolute camera view before switching.
+                    app->savedCamPos = app->camera.cam3d.position;
+                    app->savedCamTarget = app->camera.cam3d.target;
+                    app->restoreCameraAfterSwitch = true;
+
+                    // Try candidate files in the requested direction, skipping ones that fail.
+                    bool loaded = false;
+                    for (int attempt = 1; attempt < app->fileListCount; attempt++)
                     {
-                        app->fileListIndex = candidate;
-                        loaded = true;
-                        OnFileLoaded(app);
-                        break;
+                        int candidate = (startIndex + direction * attempt + app->fileListCount) % app->fileListCount;
+                        if (CharacterDataReplaceAt(&app->characterData, activeSlot, app->fileList[candidate], app->errMsg, 512))
+                        {
+                            app->fileListIndex = candidate;
+                            loaded = true;
+                            break;
+                        }
                     }
-                }
 
-                // If nothing else could be loaded, restore the current file and cancel camera restore.
-                if (!loaded)
-                {
-                    app->fileListIndex = startIndex;
-                    app->restoreCameraAfterSwitch = false;
-                    CharacterDataFree(&app->characterData);
-                    if (CharacterDataLoadFromFile(&app->characterData, app->fileList[startIndex], app->errMsg, 512))
-                        OnFileLoaded(app);
+                    if (loaded)
+                    {
+                        // Post-replace refresh (mirrors OnFileLoaded, but keeps `active` on the replaced slot).
+                        if (app->characterData.hasSkinnedMesh)
+                        {
+                            app->renderSettings.drawMeshes = true;
+                            app->renderSettings.drawCapsules = false;
+                        }
+                        CapsuleDataUpdateForCharacters(&app->capsuleData, &app->characterData);
+                        ScrubberSettingsRecomputeLimits(&app->scrubberSettings, &app->characterData);
+                        ScrubberSettingsInitMaxs(&app->scrubberSettings, &app->characterData);
+
+                        char windowTitle[528];
+                        snprintf(windowTitle, sizeof(windowTitle), "%s (%d/%d) - BVHView",
+                                 app->characterData.filePaths[activeSlot],
+                                 app->fileListIndex + 1,
+                                 app->fileListCount);
+                        SetWindowTitle(windowTitle);
+                    }
+                    else
+                    {
+                        // No candidate could be loaded — nothing changed, drop the camera restore.
+                        app->restoreCameraAfterSwitch = false;
+                    }
                 }
             }
         }
