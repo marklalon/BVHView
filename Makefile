@@ -47,7 +47,7 @@ ifeq ($(PLATFORM),PLATFORM_DESKTOP)
         else
             CFLAGS ?= bvhview.res $(DEFINES) -Wall -g $(INCLUDE_DIR) $(LIBRARY_DIR)
         endif
-        LIBS = -lraylib -lopengl32 -lgdi32 -lwinmm
+        LIBS = -lraylib -lopengl32 -lgdi32 -lwinmm -lurlmon
     endif
 
 endif
