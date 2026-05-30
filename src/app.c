@@ -406,7 +406,7 @@ void ApplicationUpdate(void* voidApplicationState)
         if (next < 0) next = app->characterData.count - 1;
         if (next >= app->characterData.count) next = 0;
         app->characterData.active = next;
-        ScrubberSettingsClamp(&app->scrubberSettings, &app->characterData);
+        ScrubberSettingsInitMaxs(&app->scrubberSettings, &app->characterData);
         char windowTitle[528];
         snprintf(windowTitle, sizeof(windowTitle), "%s - BVHView", app->characterData.filePaths[app->characterData.active]);
         SetWindowTitle(windowTitle);

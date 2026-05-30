@@ -77,18 +77,20 @@ void ScrubberSettingsInitMaxs(ScrubberSettings* settings, CharacterData* charact
     settings->frameMin = 0;
     settings->frameMinSelect = settings->frameMin;
     settings->timeMin = 0.0f;
+    settings->playTime = Clamp(settings->playTime, settings->timeMin, settings->timeMax);
 }
 
 void ScrubberSettingsClamp(ScrubberSettings* settings, CharacterData* characterData)
 {
     if (characterData->count == 0) return;
-    int frameCount = ScrubberGetFrameCount(characterData, characterData->active);
     float frameTime = ScrubberGetFrameTime(characterData, characterData->active);
-    settings->frameMax = frameCount - 1;
+    int activeFrameCount = ScrubberGetFrameCount(characterData, characterData->active);
+    int activeFrameMax = activeFrameCount - 1;
+    settings->frameMax = ClampInt(settings->frameMax, 0, activeFrameMax);
     settings->frameMaxSelect = settings->frameMax;
     settings->timeMax = settings->frameMax * frameTime;
-    settings->frameMin = 0;
+    settings->frameMin = ClampInt(settings->frameMin, 0, settings->frameMax);
     settings->frameMinSelect = settings->frameMin;
-    settings->timeMin = 0.0f;
+    settings->timeMin = settings->frameMin * frameTime;
     settings->playTime = Clamp(settings->playTime, settings->timeMin, settings->timeMax);
 }

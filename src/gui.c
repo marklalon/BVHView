@@ -493,7 +493,7 @@ void GuiCharacterData(CharacterData* characterData, GuiWindowFileDialogState* fi
                 if (characterData->visible[j])
                 {
                     characterData->active = j;
-                    ScrubberSettingsClamp(scrubberSettings, characterData);
+                    ScrubberSettingsInitMaxs(scrubberSettings, characterData);
                     break;
                 }
             }
@@ -501,7 +501,7 @@ void GuiCharacterData(CharacterData* characterData, GuiWindowFileDialogState* fi
         if (bvhSelected && (characterData->active != i))
         {
             characterData->active = i;
-            ScrubberSettingsClamp(scrubberSettings, characterData);
+            ScrubberSettingsInitMaxs(scrubberSettings, characterData);
             char windowTitle[528];
             snprintf(windowTitle, sizeof(windowTitle), "%s - BVHView", characterData->filePaths[characterData->active]);
             SetWindowTitle(windowTitle);
