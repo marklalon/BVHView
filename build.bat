@@ -24,11 +24,21 @@ goto end
 :release
 echo Building RELEASE ...
 make BUILD_MODE=RELEASE RAYLIB_DIR="%RAYLIB_DIR%"
+if errorlevel 1 goto end
+echo Copying bvhview.exe to C:\Tools\bvhview...
+if not exist "C:\Tools\bvhview" mkdir "C:\Tools\bvhview"
+copy /y bvhview.exe "C:\Tools\bvhview\bvhview.exe" >nul
+echo Done.
 goto end
 
 :debug
 echo Building DEBUG ...
 make BUILD_MODE=DEBUG RAYLIB_DIR="%RAYLIB_DIR%"
+if errorlevel 1 goto end
+echo Copying bvhview.exe to C:\Tools\bvhview...
+if not exist "C:\Tools\bvhview" mkdir "C:\Tools\bvhview"
+copy /y bvhview.exe "C:\Tools\bvhview\bvhview.exe" >nul
+echo Done.
 goto end
 
 :clean

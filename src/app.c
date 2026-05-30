@@ -356,7 +356,12 @@ void ApplicationUpdate(void* voidApplicationState)
                 OnFileLoaded(app);
             }
         }
-        else snprintf(app->errMsg, 512, "Error: File '%.*s' is not a supported animation file (.bvh, .glb, .gltf).", 400, app->fileDialogState.fileNameText);
+        else
+        {
+            char fullPath[2048];
+            snprintf(fullPath, sizeof(fullPath), "%s/%s", app->fileDialogState.dirPathText, app->fileDialogState.fileNameText);
+            snprintf(app->errMsg, 512, "Error: File '%.*s' is not supported (.bvh/.glb/.gltf).", 400, fullPath);
+        }
         app->fileDialogState.SelectFilePressed = false;
     }
 

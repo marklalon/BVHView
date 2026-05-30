@@ -161,7 +161,7 @@ static bool DownloadProtocolArg(const char* protocolArg, char* outputPath, size_
         char localPath[BVHVIEW_PATH_BUFFER_SIZE];
         if (!FileUrlToPath(sourceUrl, localPath, sizeof(localPath)))
         {
-            snprintf(errMsg, errMsgSize, "Local BVH file not found or invalid path.");
+            snprintf(errMsg, errMsgSize, "file not found: %s", sourceUrl);
             return false;
         }
         snprintf(outputPath, outputPathSize, "%s", localPath);
@@ -178,7 +178,7 @@ static bool DownloadProtocolArg(const char* protocolArg, char* outputPath, size_
     DWORD tempPathLen = GetTempPathA((DWORD)sizeof(tempPath), tempPath);
     if (tempPathLen == 0 || tempPathLen >= sizeof(tempPath))
     {
-        snprintf(errMsg, errMsgSize, "Could not get temporary directory.");
+        snprintf(errMsg, errMsgSize, "Could not get temporary directory for '%s'.", sourceUrl);
         return false;
     }
 
