@@ -582,17 +582,18 @@ void GuiScrubberSettings(ScrubberSettings* settings, CharacterData* characterDat
     GuiToggle((Rectangle){ screenWidth / 2 + 210, screenHeight - 80, 30, 20 }, "4x", &speed4x); if (speed4x) settings->playSpeed = 4.0f;
     GuiSliderBar((Rectangle){ screenWidth / 2 + 250, screenHeight - 80, 70, 20 }, "", TextFormat("%5.2fx", settings->playSpeed), &settings->playSpeed, 0.0f, 4.0f);
     int frame = ClampInt((int)(settings->playTime / frameTime + 0.5f), settings->frameMin, settings->frameMax);
-    if (GuiValueBox((Rectangle){ screenWidth / 2 - 540, screenHeight - 80, 50, 20 }, "Min   ", &settings->frameMinSelect, 0, settings->frameLimit, settings->frameMinEdit))
+    int activeFrameLimit = ScrubberGetFrameCount(characterData, characterData->active) - 1;
+    if (GuiValueBox((Rectangle){ screenWidth / 2 - 540, screenHeight - 80, 50, 20 }, "Min   ", &settings->frameMinSelect, 0, activeFrameLimit, settings->frameMinEdit))
     {
         settings->frameMinEdit = !settings->frameMinEdit;
         if (!settings->frameMinEdit) { settings->frameMin = settings->frameMinSelect; ScrubberSettingsClamp(settings, characterData); }
     }
-    if (GuiValueBox((Rectangle){ screenWidth / 2 + 470, screenHeight - 80, 50, 20 }, "Max   ", &settings->frameMaxSelect, 0, settings->frameLimit, settings->frameMaxEdit))
+    if (GuiValueBox((Rectangle){ screenWidth / 2 + 470, screenHeight - 80, 50, 20 }, "Max   ", &settings->frameMaxSelect, 0, activeFrameLimit, settings->frameMaxEdit))
     {
         settings->frameMaxEdit = !settings->frameMaxEdit;
         if (!settings->frameMaxEdit) { settings->frameMax = settings->frameMaxSelect; ScrubberSettingsClamp(settings, characterData); }
     }
-    GuiLabel((Rectangle){ screenWidth / 2 + 530, screenHeight - 80, 100, 20 }, TextFormat("of %i", settings->frameLimit));
+    GuiLabel((Rectangle){ screenWidth / 2 + 530, screenHeight - 80, 100, 20 }, TextFormat("of %i", activeFrameLimit));
     Rectangle sliderRect = { screenWidth / 2 - 540, screenHeight - 50, 1080, 20 };
     float frameFloatPrev = settings->frameSnap ? (float)frame : settings->playTime / frameTime;
     float frameFloat = frameFloatPrev;
