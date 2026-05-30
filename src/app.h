@@ -15,6 +15,26 @@
 #include "render_settings.h"
 #include "camera.h"
 
+#if defined(_WIN32) && !defined(PLATFORM_WEB)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOGDI
+#define NOGDI
+#endif
+#ifndef NOUSER
+#define NOUSER
+#endif
+#include <windows.h>
+
+// windows.h (even with WIN32_LEAN_AND_MEAN) defines Rectangle as a macro,
+// which conflicts with raylib's Rectangle struct.
+#undef Rectangle
+
+#define BVHVIEW_PATH_BUFFER_SIZE 4096
+#define BVHVIEW_REUSE_MAILSLOT "\\\\.\\mailslot\\BVHViewReuse"
+#endif
+
 // Include external file dialog header for GuiWindowFileDialogState type
 // NOTE: GUI_WINDOW_FILE_DIALOG_IMPLEMENTATION is defined in gui.c, not here
 #include "../examples/custom_file_dialog/gui_window_file_dialog.h"
@@ -54,6 +74,10 @@ typedef struct ApplicationState {
     bool restoreCameraAfterSwitch;
     Vector3 savedCamPos;
     Vector3 savedCamTarget;
+
+#if defined(_WIN32) && !defined(PLATFORM_WEB)
+    HANDLE reuseMailslot;
+#endif
 } ApplicationState;
 
 void ApplicationUpdate(void* voidApplicationState);

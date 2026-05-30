@@ -37,11 +37,108 @@ HRESULT WINAPI URLDownloadToFileA(void* caller, const char* url, const char* fil
 #endif
 
 #if defined(_WIN32) && !defined(PLATFORM_WEB)
-#define BVHVIEW_PATH_BUFFER_SIZE 4096
+// Definitions and declarations excluded by WIN32_LEAN_AND_MEAN
+#define SW_RESTORE 9
+
+// Function declarations (excluded by WIN32_LEAN_AND_MEAN)
+BOOL WINAPI IsIconic(HWND hWnd);
+BOOL WINAPI ShowWindow(HWND hWnd, int nCmdShow);
+BOOL WINAPI SetForegroundWindow(HWND hWnd);
+BOOL WINAPI EnumWindows(BOOL (CALLBACK *lpEnumFunc)(HWND, LPARAM), LPARAM lParam);
+int WINAPI GetWindowTextA(HWND hWnd, LPSTR lpString, int nMaxCount);
+
+// Data passed to EnumWindows callback to find a BVHView window
+typedef struct {
+    HWND foundHwnd;
+} FindBvhViewData;
+
+static BOOL CALLBACK FindBvhViewCallback(HWND hwnd, LPARAM lParam)
+{
+    FindBvhViewData* data = (FindBvhViewData*)lParam;
+    char title[256];
+    if (GetWindowTextA(hwnd, title, sizeof(title)) > 0)
+    {
+        // Window title ends with " - BVHView" or is exactly "BVHView"
+        size_t len = strlen(title);
+        if ((len >= 10 && strcmp(title + len - 10, " - BVHView") == 0) ||
+            strcmp(title, "BVHView") == 0)
+        {
+            data->foundHwnd = hwnd;
+            return FALSE; // stop enumeration
+        }
+    }
+    return TRUE; // continue enumeration
+}
+
+// Send a file path to an existing BVHView instance via mailslot IPC.
+// Returns true if a running instance was found and the message was sent.
+static bool SendFileToExistingInstance(const char* filePath)
+{
+    HANDLE mailslot = CreateFileA(BVHVIEW_REUSE_MAILSLOT, GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (mailslot == INVALID_HANDLE_VALUE) return false;
+
+    DWORD bytesWritten = 0;
+    DWORD bytesToWrite = (DWORD)(strlen(filePath) + 1);
+    bool sent = WriteFile(mailslot, filePath, bytesToWrite, &bytesWritten, NULL) && bytesWritten == bytesToWrite;
+    CloseHandle(mailslot);
+    if (!sent) return false;
+
+    FindBvhViewData data = { NULL };
+    EnumWindows(FindBvhViewCallback, (LPARAM)&data);
+    HWND hwnd = data.foundHwnd;
+    if (!hwnd) return true;
+
+    // Bring the window to front and restore if minimized
+    if (IsIconic(hwnd))
+        ShowWindow(hwnd, SW_RESTORE);
+    SetForegroundWindow(hwnd);
+    return true;
+}
 
 static bool IsBvhViewProtocolArg(const char* arg)
 {
     return _strnicmp(arg, "bvhview://", 10) == 0;
+}
+
+static bool IsQueryFlag(const char* start, size_t len, const char* name)
+{
+    size_t nameLen = strlen(name);
+    if (len < nameLen) return false;
+    if (_strnicmp(start, name, nameLen) != 0) return false;
+    return len == nameLen || start[nameLen] == '=';
+}
+
+static bool ProtocolArgHasReuseFlag(const char* protocolUrl)
+{
+    const char* query = strchr(protocolUrl, '?');
+    if (!query) return false;
+
+    const char* param = query + 1;
+    while (*param != '\0')
+    {
+        const char* end = strchr(param, '&');
+        size_t len = end ? (size_t)(end - param) : strlen(param);
+        if (IsQueryFlag(param, len, "--reuse") || IsQueryFlag(param, len, "reuse"))
+            return true;
+
+        if (!end) break;
+        param = end + 1;
+    }
+
+    return false;
+}
+
+static bool ReuseRequested(int argc, char** argv)
+{
+    if (ArgBool(argc, argv, "reuse", false)) return true;
+
+    for (int i = 1; i < argc; i++)
+    {
+        if (strcmp(argv[i], "--reuse") == 0) return true;
+        if (IsBvhViewProtocolArg(argv[i]) && ProtocolArgHasReuseFlag(argv[i])) return true;
+    }
+
+    return false;
 }
 
 static int HexValue(char c)
@@ -206,11 +303,61 @@ int main(int argc, char** argv)
     PROFILE_INIT();
     PROFILE_TICKERS_INIT();
 
+#if defined(_WIN32) && !defined(PLATFORM_WEB)
+    // --reuse: if true, try to send the file to an existing BVHView instance.
+    // Accept --reuse, --reuse=true, and bvhview://open?--reuse&url=...
+    bool reuse = ReuseRequested(argc, argv);
+    if (reuse)
+    {
+        // Find the first non-option argument (file path or protocol URL)
+        for (int i = 1; i < argc; i++)
+        {
+            if (argv[i][0] == '-') continue;
+
+            const char* loadPath = argv[i];
+            char downloadedPath[BVHVIEW_PATH_BUFFER_SIZE];
+            char errMsg[512];
+
+            if (IsBvhViewProtocolArg(argv[i]))
+            {
+                if (!DownloadProtocolArg(argv[i], downloadedPath, sizeof(downloadedPath), errMsg, sizeof(errMsg)))
+                {
+                    printf("ERROR: %s\n", errMsg);
+                    return 1;
+                }
+                loadPath = downloadedPath;
+            }
+            else
+            {
+                char fullPath[BVHVIEW_PATH_BUFFER_SIZE];
+                DWORD fullPathLen = GetFullPathNameA(loadPath, sizeof(fullPath), fullPath, NULL);
+                if (fullPathLen > 0 && fullPathLen < sizeof(fullPath))
+                    loadPath = fullPath;
+            }
+
+            if (SendFileToExistingInstance(loadPath))
+            {
+                printf("Sent file to existing BVHView instance: %s\n", loadPath);
+                return 0;
+            }
+            else
+            {
+                printf("No existing BVHView instance found. Starting new one.\n");
+                reuse = false;
+                break;
+            }
+        }
+    }
+#endif
+
     ApplicationState app;
     app.argc = argc;
     app.argv = argv;
     app.screenWidth = ArgInt(argc, argv, "screenWidth", 1920);
     app.screenHeight = ArgInt(argc, argv, "screenHeight", 1080);
+#if defined(_WIN32) && !defined(PLATFORM_WEB)
+    app.reuseMailslot = CreateMailslotA(BVHVIEW_REUSE_MAILSLOT, 0, 0, NULL);
+#endif
 
     SetConfigFlags(FLAG_VSYNC_HINT);
     SetConfigFlags(FLAG_MSAA_4X_HINT);
@@ -281,6 +428,10 @@ int main(int argc, char** argv)
     UnloadModel(app.capsuleModel);
     UnloadModel(app.groundPlaneModel);
     UnloadShader(app.shader);
+#if defined(_WIN32) && !defined(PLATFORM_WEB)
+    if (app.reuseMailslot && app.reuseMailslot != INVALID_HANDLE_VALUE)
+        CloseHandle(app.reuseMailslot);
+#endif
     CloseWindow();
 
     return 0;

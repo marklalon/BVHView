@@ -22,6 +22,10 @@
 #include "argparse.h"
 #include "camera.h"
 
+#if defined(_WIN32) && !defined(PLATFORM_WEB)
+#define MAILSLOT_NO_MESSAGE ((DWORD)-1)
+#endif
+
 #define RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT 24
 #define RAYGUI_IMPLEMENTATION
 #include "raygui.h"
@@ -340,9 +344,39 @@ void OnFileLoaded(ApplicationState* app)
     SetWindowTitle(windowTitle);
 }
 
+#if defined(_WIN32) && !defined(PLATFORM_WEB)
+static void ProcessReuseMailslot(ApplicationState* app)
+{
+    HANDLE mailslot = (HANDLE)app->reuseMailslot;
+    if (mailslot == INVALID_HANDLE_VALUE) return;
+
+    DWORD nextSize = 0;
+    DWORD messageCount = 0;
+    while (GetMailslotInfo(mailslot, NULL, &nextSize, &messageCount, NULL) &&
+           messageCount > 0 && nextSize != MAILSLOT_NO_MESSAGE)
+    {
+        char filePath[BVHVIEW_PATH_BUFFER_SIZE];
+        DWORD bytesRead = 0;
+        if (!ReadFile(mailslot, filePath, sizeof(filePath) - 1, &bytesRead, NULL) || bytesRead == 0)
+            break;
+
+        filePath[bytesRead < sizeof(filePath) ? bytesRead : sizeof(filePath) - 1] = '\0';
+        if (CharacterDataLoadFromFile(&app->characterData, filePath, app->errMsg, 512))
+        {
+            app->characterData.active = app->characterData.count - 1;
+            OnFileLoaded(app);
+        }
+    }
+}
+#endif
+
 void ApplicationUpdate(void* voidApplicationState)
 {
     ApplicationState* app = voidApplicationState;
+
+#if defined(_WIN32) && !defined(PLATFORM_WEB)
+    ProcessReuseMailslot(app);
+#endif
 
     // Process File Dialog
     if (app->fileDialogState.SelectFilePressed)
