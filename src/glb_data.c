@@ -554,9 +554,24 @@ bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSi
                 Image img = { 0 };
                 img.data = pixels; img.width = w; img.height = h; img.mipmaps = 1; img.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
                 Texture2D newTex = LoadTextureFromImage(img);
+                GenTextureMipmaps(&newTex);
+                SetTextureFilter(newTex, TEXTURE_FILTER_TRILINEAR);
                 stbi_image_free(pixels);
                 data->model.materials[matIdx].maps[MATERIAL_MAP_ALBEDO].texture = newTex;
                 printf("INFO: Reloaded GLB texture (material %d) via stb_image: %dx%d\n", matIdx, w, h);
+            }
+        }
+    }
+    // Enable mipmaps for all textures loaded by raylib's LoadModel (including those already loaded)
+    {
+        unsigned int defaultTexId = rlGetTextureIdDefault();
+        for (int matIdx = 0; matIdx < data->model.materialCount; matIdx++)
+        {
+            Texture2D tex = data->model.materials[matIdx].maps[MATERIAL_MAP_ALBEDO].texture;
+            if (tex.id > 0 && tex.id != defaultTexId && (tex.width > 1 || tex.height > 1))
+            {
+                GenTextureMipmaps(&tex);
+                SetTextureFilter(tex, TEXTURE_FILTER_TRILINEAR);
             }
         }
     }
