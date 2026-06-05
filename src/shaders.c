@@ -109,6 +109,9 @@ uniform float objectOpacity;
 uniform sampler2D texture0;
 uniform int useTexture;
 
+uniform int alphaMode;
+uniform float alphaCutoff;
+
 uniform int isCapsule;
 uniform vec3 capsulePosition;
 uniform vec4 capsuleRotation;
@@ -377,6 +380,31 @@ void main()
 
     vec3 final = diffuse + ambient + specular;
 
+    // Screen-door transparency using 8x8 Bayer dither matrix
+    if (alphaMode == 1)
+    {
+        // MASK mode: hard alpha cutoff
+        float texAlpha = texture(texture0, uvs).a;
+        if (texAlpha < alphaCutoff) discard;
+    }
+    else if (alphaMode == 2)
+    {
+        // BLEND mode: screen-door stipple dither
+        const float bayer8[64] = float[64](
+            0.0/64.0, 32.0/64.0,  8.0/64.0, 40.0/64.0,  2.0/64.0, 34.0/64.0, 10.0/64.0, 42.0/64.0,
+            48.0/64.0, 16.0/64.0, 56.0/64.0, 24.0/64.0, 50.0/64.0, 18.0/64.0, 58.0/64.0, 26.0/64.0,
+            12.0/64.0, 44.0/64.0,  4.0/64.0, 36.0/64.0, 14.0/64.0, 46.0/64.0,  6.0/64.0, 38.0/64.0,
+            60.0/64.0, 28.0/64.0, 52.0/64.0, 20.0/64.0, 62.0/64.0, 30.0/64.0, 54.0/64.0, 22.0/64.0,
+             3.0/64.0, 35.0/64.0, 11.0/64.0, 43.0/64.0,  1.0/64.0, 33.0/64.0,  9.0/64.0, 41.0/64.0,
+            51.0/64.0, 19.0/64.0, 59.0/64.0, 27.0/64.0, 49.0/64.0, 17.0/64.0, 57.0/64.0, 25.0/64.0,
+            15.0/64.0, 47.0/64.0,  7.0/64.0, 39.0/64.0, 13.0/64.0, 45.0/64.0,  5.0/64.0, 37.0/64.0,
+            63.0/64.0, 31.0/64.0, 55.0/64.0, 23.0/64.0, 61.0/64.0, 29.0/64.0, 53.0/64.0, 21.0/64.0
+        );
+        float texAlpha = texture(texture0, uvs).a * objectOpacity;
+        ivec2 pixel = ivec2(int(gl_FragCoord.x) % 8, int(gl_FragCoord.y) % 8);
+        if (texAlpha <= bayer8[pixel.y * 8 + pixel.x]) discard;
+    }
+
     finalColor = vec4(ToGamma(exposure * final), objectOpacity);
 }
 
@@ -413,6 +441,8 @@ void ShaderUniformsInit(ShaderUniforms* uniforms, Shader shader)
     uniforms->objectGlossiness = GetShaderLocation(shader, "objectGlossiness");
     uniforms->objectOpacity = GetShaderLocation(shader, "objectOpacity");
     uniforms->useTexture = GetShaderLocation(shader, "useTexture");
+    uniforms->alphaMode = GetShaderLocation(shader, "alphaMode");
+    uniforms->alphaCutoff = GetShaderLocation(shader, "alphaCutoff");
 
     uniforms->sunStrength = GetShaderLocation(shader, "sunStrength");
     uniforms->sunDir = GetShaderLocation(shader, "sunDir");

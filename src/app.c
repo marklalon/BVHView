@@ -782,26 +782,58 @@ void ApplicationUpdate(void* voidApplicationState)
             if (glb->model.meshCount == 0) continue;
             Vector3 meshColor = { app->characterData.colors[i].r / 255.0f, app->characterData.colors[i].g / 255.0f, app->characterData.colors[i].b / 255.0f };
             float meshOpacity = app->characterData.opacities[i];
-            Model drawModel = glb->model;
-            for (int materialIndex = 0; materialIndex < drawModel.materialCount; materialIndex++)
-                drawModel.materials[materialIndex].shader = app->shader;
-            drawModel.transform = GLBDataGetModelTransform(glb, app->characterData.scales[i], app->scrubberSettings.inplace);
+            Matrix modelTransform = GLBDataGetModelTransform(glb, app->characterData.scales[i], app->scrubberSettings.inplace);
+            unsigned int defaultTexId = rlGetTextureIdDefault();
+
+            // Set shader on all materials
+            for (int matIdx = 0; matIdx < glb->model.materialCount; matIdx++)
+                glb->model.materials[matIdx].shader = app->shader;
+
+            // Base defaults (per-material values override below)
             SetShaderValue(app->shader, app->uniforms.objectColor, &meshColor, SHADER_UNIFORM_VEC3);
             SetShaderValue(app->shader, app->uniforms.objectOpacity, &meshOpacity, SHADER_UNIFORM_FLOAT);
-            int modelHasTexture = 0;
-            if (app->renderSettings.drawTexture)
+            int defaultAlphaMode = 0;
+            float defaultAlphaCutoff = 0.5f;
+            SetShaderValue(app->shader, app->uniforms.alphaMode, &defaultAlphaMode, SHADER_UNIFORM_INT);
+            SetShaderValue(app->shader, app->uniforms.alphaCutoff, &defaultAlphaCutoff, SHADER_UNIFORM_FLOAT);
+            int noTexture = 0;
+            SetShaderValue(app->shader, app->uniforms.useTexture, &noTexture, SHADER_UNIFORM_INT);
+
+            // Draw each mesh individually with per-material alpha
+            for (int meshIdx = 0; meshIdx < glb->model.meshCount; meshIdx++)
             {
-                unsigned int defaultTexId = rlGetTextureIdDefault();
-                for (int materialIndex = 0; materialIndex < drawModel.materialCount; materialIndex++)
+                Mesh mesh = glb->model.meshes[meshIdx];
+                int matIdx = glb->model.meshMaterial[meshIdx];
+                if (matIdx < 0 || matIdx >= glb->model.materialCount) continue;
+                Material material = glb->model.materials[matIdx];
+
+                // Per-material alpha info from GLTF
+                int alphaMode = 0;
+                float alphaCutoff = 0.5f;
+                if (glb->materialInfo != NULL && matIdx < glb->materialInfoCount)
                 {
-                    Texture2D tex = drawModel.materials[materialIndex].maps[MATERIAL_MAP_ALBEDO].texture;
-                    if (tex.id > 0 && tex.id != defaultTexId && (tex.width > 1 || tex.height > 1)) { modelHasTexture = 1; break; }
+                    alphaMode = glb->materialInfo[matIdx].alphaMode;
+                    alphaCutoff = glb->materialInfo[matIdx].alphaCutoff;
                 }
+                SetShaderValue(app->shader, app->uniforms.alphaMode, &alphaMode, SHADER_UNIFORM_INT);
+                SetShaderValue(app->shader, app->uniforms.alphaCutoff, &alphaCutoff, SHADER_UNIFORM_FLOAT);
+
+                // Per-material texture check
+                int hasTexture = 0;
+                if (app->renderSettings.drawTexture)
+                {
+                    Texture2D tex = material.maps[MATERIAL_MAP_ALBEDO].texture;
+                    if (tex.id > 0 && tex.id != defaultTexId && (tex.width > 1 || tex.height > 1))
+                        hasTexture = 1;
+                }
+                SetShaderValue(app->shader, app->uniforms.useTexture, &hasTexture, SHADER_UNIFORM_INT);
+
+                // Screen-door (alphaMode 2) uses discard; no depth-mask hack needed
+                bool needsDepthMaskHack = (meshOpacity < 1.0f && alphaMode != 2);
+                if (needsDepthMaskHack) { rlDrawRenderBatchActive(); rlDisableDepthMask(); }
+                DrawMesh(mesh, material, modelTransform);
+                if (needsDepthMaskHack) { rlDrawRenderBatchActive(); rlEnableDepthMask(); }
             }
-            SetShaderValue(app->shader, app->uniforms.useTexture, &modelHasTexture, SHADER_UNIFORM_INT);
-            if (meshOpacity < 1.0f) { rlDrawRenderBatchActive(); rlDisableDepthMask(); }
-            DrawModel(drawModel, Vector3Zero(), 1.0f, WHITE);
-            if (meshOpacity < 1.0f) { rlDrawRenderBatchActive(); rlEnableDepthMask(); }
         }
     }
 

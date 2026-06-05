@@ -14,6 +14,14 @@
 // Forward declaration
 typedef struct TransformData TransformData;
 
+// Per-material transparency info parsed from GLTF material
+// alphaMode: 0 = OPAQUE, 1 = MASK (alpha cutoff), 2 = BLEND (screen-door)
+typedef struct GLBMaterialInfo
+{
+    int alphaMode;
+    float alphaCutoff;
+} GLBMaterialInfo;
+
 // Structure for storing GLB model and animation data
 typedef struct GLBData
 {
@@ -33,6 +41,8 @@ typedef struct GLBData
     Transform* sourceRootPose;
     int* topoOrder;
     int* invTopoOrder;
+    GLBMaterialInfo* materialInfo;
+    int materialInfoCount;
 } GLBData;
 
 void GLBDataInit(GLBData* data);

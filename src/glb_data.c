@@ -48,6 +48,8 @@ void GLBDataInit(GLBData* data)
     data->sourceRootPose = NULL;
     data->topoOrder = NULL;
     data->invTopoOrder = NULL;
+    data->materialInfo = NULL;
+    data->materialInfoCount = 0;
 }
 
 void GLBDataFree(GLBData* data)
@@ -71,6 +73,7 @@ void GLBDataFree(GLBData* data)
     if (data->sourceData != NULL) cgltf_free(data->sourceData);
     free(data->topoOrder);
     free(data->invTopoOrder);
+    free(data->materialInfo);
     data->model = (Model){ 0 };
     data->animCount = 0;
     data->activeAnim = 0;
@@ -86,6 +89,8 @@ void GLBDataFree(GLBData* data)
     data->sourceRootPose = NULL;
     data->topoOrder = NULL;
     data->invTopoOrder = NULL;
+    data->materialInfo = NULL;
+    data->materialInfoCount = 0;
 }
 
 int GLBDataGetSourceFrameCount(const GLBData* data, int animIdx)
@@ -520,6 +525,42 @@ bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSi
     for (int a = 0; a < data->animCount; a++)
     { data->sourceFrameCounts[a] = data->animations[a].keyframeCount; data->sourceFrameTimes[a] = data->frameTime; data->sourceDurations[a] = (data->animations[a].keyframeCount - 1) * data->frameTime; }
     GLBDataLoadSourceTiming(data, filename);
+
+    // Parse per-material alpha info from GLTF materials
+    if (data->sourceData != NULL && data->model.materialCount > 0)
+    {
+        data->materialInfoCount = data->model.materialCount;
+        data->materialInfo = (GLBMaterialInfo*)calloc(data->materialInfoCount, sizeof(GLBMaterialInfo));
+        if (data->materialInfo != NULL)
+        {
+            for (int matIdx = 0; matIdx < data->materialInfoCount; matIdx++)
+            {
+                // raylib material 0 is a default material; GLTF materials start at raylib index 1
+                int cgltfIdx = matIdx - 1;
+                if (cgltfIdx >= 0 && cgltfIdx < (int)data->sourceData->materials_count)
+                {
+                    cgltf_material* mat = &data->sourceData->materials[cgltfIdx];
+                    if (mat->alpha_mode == cgltf_alpha_mode_mask)
+                    {
+                        data->materialInfo[matIdx].alphaMode = 1;
+                        data->materialInfo[matIdx].alphaCutoff = mat->alpha_cutoff;
+                    }
+                    else if (mat->alpha_mode == cgltf_alpha_mode_blend)
+                    {
+                        data->materialInfo[matIdx].alphaMode = 2;
+                        data->materialInfo[matIdx].alphaCutoff = 0.0f;
+                    }
+                    else
+                    {
+                        data->materialInfo[matIdx].alphaMode = 0;
+                        data->materialInfo[matIdx].alphaCutoff = 0.5f;
+                    }
+                }
+            }
+            printf("INFO: Parsed %d material alpha modes from GLTF\n", data->materialInfoCount);
+        }
+    }
+
     GLBDataUndoSkinnedMeshNodeTransforms(data);
     {
         unsigned int defaultTexId = rlGetTextureIdDefault();

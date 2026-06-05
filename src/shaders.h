@@ -46,6 +46,8 @@ typedef struct ShaderUniforms
     int objectGlossiness;
     int objectOpacity;
     int useTexture;
+    int alphaMode;
+    int alphaCutoff;
 
     int sunStrength;
     int sunDir;
