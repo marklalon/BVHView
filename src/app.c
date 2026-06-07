@@ -316,10 +316,14 @@ static void BuildFileList(ApplicationState* app, const char* currentFilePath)
 void OnFileLoaded(ApplicationState* app)
 {
     app->characterData.active = app->characterData.count - 1;
-    if (app->characterData.hasSkinnedMesh)
+    if (!app->firstFileLoaded)
     {
-        app->renderSettings.drawMeshes = true;
-        app->renderSettings.drawCapsules = false;
+        if (app->characterData.hasSkinnedMesh)
+        {
+            app->renderSettings.drawMeshes = true;
+            app->renderSettings.drawCapsules = false;
+        }
+        app->firstFileLoaded = true;
     }
     CapsuleDataUpdateForCharacters(&app->capsuleData, &app->characterData);
     ScrubberSettingsRecomputeLimits(&app->scrubberSettings, &app->characterData);
@@ -496,10 +500,14 @@ void ApplicationUpdate(void* voidApplicationState)
                     if (loaded)
                     {
                         // Post-replace refresh (mirrors OnFileLoaded, but keeps `active` on the replaced slot).
-                        if (app->characterData.hasSkinnedMesh)
+                        if (!app->firstFileLoaded)
                         {
-                            app->renderSettings.drawMeshes = true;
-                            app->renderSettings.drawCapsules = false;
+                            if (app->characterData.hasSkinnedMesh)
+                            {
+                                app->renderSettings.drawMeshes = true;
+                                app->renderSettings.drawCapsules = false;
+                            }
+                            app->firstFileLoaded = true;
                         }
                         CapsuleDataUpdateForCharacters(&app->capsuleData, &app->characterData);
                         ScrubberSettingsRecomputeLimits(&app->scrubberSettings, &app->characterData);

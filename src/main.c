@@ -355,6 +355,7 @@ int main(int argc, char** argv)
     app.argv = argv;
     app.screenWidth = ArgInt(argc, argv, "screenWidth", 1920);
     app.screenHeight = ArgInt(argc, argv, "screenHeight", 1080);
+    app.firstFileLoaded = false;
 #if defined(_WIN32) && !defined(PLATFORM_WEB)
     app.reuseMailslot = CreateMailslotA(BVHVIEW_REUSE_MAILSLOT, 0, 0, NULL);
 #endif

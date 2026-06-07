@@ -75,6 +75,9 @@ typedef struct ApplicationState {
     Vector3 savedCamPos;
     Vector3 savedCamTarget;
 
+    // Track whether the first file has been loaded (for auto-enabling mesh drawing)
+    bool firstFileLoaded;
+
 #if defined(_WIN32) && !defined(PLATFORM_WEB)
     HANDLE reuseMailslot;
 #endif
