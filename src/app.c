@@ -26,6 +26,50 @@
 #define MAILSLOT_NO_MESSAGE ((DWORD)-1)
 #endif
 
+// Natural-order, case-insensitive string compare (matches Windows Explorer behaviour).
+// Digit sequences are compared numerically; punctuation '_' sorts before '-'.
+static int NaturalStricmp(const char* a, const char* b)
+{
+    while (*a && *b)
+    {
+        // Digit runs → compare numerically
+        if (isdigit((unsigned char)*a) && isdigit((unsigned char)*b))
+        {
+            // Skip leading zeros
+            while (*a == '0') a++;
+            while (*b == '0') b++;
+
+            const char* da = a;
+            const char* db = b;
+            while (isdigit((unsigned char)*a)) a++;
+            while (isdigit((unsigned char)*b)) b++;
+            ptrdiff_t lenA = a - da;
+            ptrdiff_t lenB = b - db;
+            if (lenA != lenB) return lenA < lenB ? -1 : 1;
+            // Same length → compare digit-by-digit
+            while (da < a)
+            {
+                if (*da != *db) return *da < *db ? -1 : 1;
+                da++; db++;
+            }
+            continue;
+        }
+
+        // Special case: '_' sorts before '-' (Windows Explorer behaviour)
+        if ((*a == '_' && *b == '-') || (*a == '-' && *b == '_'))
+            return *a == '_' ? -1 : 1;
+
+        // Case-insensitive comparison for all other characters
+        unsigned char ca = (unsigned char)tolower((unsigned char)*a);
+        unsigned char cb = (unsigned char)tolower((unsigned char)*b);
+        if (ca != cb) return ca < cb ? -1 : 1;
+        a++; b++;
+    }
+    if (*a) return 1;
+    if (*b) return -1;
+    return 0;
+}
+
 #define RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT 24
 #define RAYGUI_IMPLEMENTATION
 #include "raygui.h"
@@ -250,14 +294,14 @@ static void BuildFileList(ApplicationState* app, const char* currentFilePath)
         return;
     }
 
-    // Sort by filename (case-insensitive)
+    // Sort by filename (natural order, case-insensitive, matches Windows Explorer)
     for (int i = 0; i < matchedCount - 1; i++)
     {
         for (int j = i + 1; j < matchedCount; j++)
         {
             const char* nameI = ExtractFilename(matched[i]);
             const char* nameJ = ExtractFilename(matched[j]);
-            if (stricmp(nameI, nameJ) > 0)
+            if (NaturalStricmp(nameI, nameJ) > 0)
             {
                 char* tmp = matched[i];
                 matched[i] = matched[j];
