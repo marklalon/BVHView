@@ -404,12 +404,13 @@ static bool GLBAnimationTargetsSkinJoint(const cgltf_skin* skin, const cgltf_nod
 
 static bool GLBDataLoadSourceTiming(GLBData* data, const char* filename)
 {
-    if (data->animCount <= 0) return true;
+    // Always parse the source GLTF data to obtain skeleton skin, rest pose, and
+    // material information — even when animCount == 0 (static model preview).
     cgltf_options options = { 0 };
     cgltf_result result = cgltf_parse_file(&options, filename, &data->sourceData);
-    if (result != cgltf_result_success) { printf("WARN: Failed to parse GLB timing data for '%s'\n", filename); return false; }
+    if (result != cgltf_result_success) { printf("WARN: Failed to parse GLB source data for '%s'\n", filename); return false; }
     result = cgltf_load_buffers(&options, data->sourceData, filename);
-    if (result != cgltf_result_success) { printf("WARN: Failed to load GLB timing buffers for '%s'\n", filename); cgltf_free(data->sourceData); data->sourceData = NULL; return false; }
+    if (result != cgltf_result_success) { printf("WARN: Failed to load GLB source buffers for '%s'\n", filename); cgltf_free(data->sourceData); data->sourceData = NULL; return false; }
     data->sourceSkin = (data->sourceData->skins_count > 0) ? &data->sourceData->skins[0] : NULL;
     int boneCount = data->model.skeleton.boneCount;
     for (int boneIdx = 0; boneIdx < boneCount; boneIdx++)
@@ -429,6 +430,9 @@ static bool GLBDataLoadSourceTiming(GLBData* data, const char* filename)
             }
         }
     }
+
+    if (data->animCount <= 0) return true;
+
     const cgltf_skin* skin = data->sourceSkin;
     int parsedAnimCount = (data->animCount < (int)data->sourceData->animations_count) ? data->animCount : (int)data->sourceData->animations_count;
     for (int a = 0; a < parsedAnimCount; a++)
@@ -508,19 +512,22 @@ bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSi
     if (data->model.skeleton.boneCount == 0)
     { if (data->model.meshCount > 0) UnloadModel(data->model); snprintf(errMsg, errMsgSize, "Error: Model '%s' has no skeleton (no bones)", filename); printf("ERROR: %s\n", errMsg); return false; }
     data->animations = LoadModelAnimations(filename, &data->animCount);
-    if (data->animCount == 0)
-    { UnloadModel(data->model); snprintf(errMsg, errMsgSize, "Error: Model '%s' has no animations", filename); printf("ERROR: %s\n", errMsg); return false; }
     data->activeAnim = 0;
     data->frameTime = 1.0f / 60.0f;
-    data->sourceFrameCounts = (int*)malloc(data->animCount * sizeof(int));
-    data->sourceFrameTimes = (float*)malloc(data->animCount * sizeof(float));
-    data->sourceDurations = (float*)malloc(data->animCount * sizeof(float));
+    // Allow loading models without animations (static preview in rest pose)
+    if (data->animCount > 0)
+    {
+        data->sourceFrameCounts = (int*)malloc(data->animCount * sizeof(int));
+        data->sourceFrameTimes = (float*)malloc(data->animCount * sizeof(float));
+        data->sourceDurations = (float*)malloc(data->animCount * sizeof(float));
+    }
     int bc = data->model.skeleton.boneCount;
     data->sourceRestPose = (Transform*)malloc(bc * sizeof(Transform));
     data->sourceLocalPose = (Transform*)malloc(bc * sizeof(Transform));
     data->sourceGlobalPose = (Transform*)malloc(bc * sizeof(Transform));
     data->sourceRootPose = (Transform*)malloc(bc * sizeof(Transform));
-    if (data->sourceFrameCounts == NULL || data->sourceFrameTimes == NULL || data->sourceDurations == NULL || data->sourceRestPose == NULL || data->sourceLocalPose == NULL || data->sourceGlobalPose == NULL || data->sourceRootPose == NULL)
+    if (data->sourceRestPose == NULL || data->sourceLocalPose == NULL || data->sourceGlobalPose == NULL || data->sourceRootPose == NULL
+        || (data->animCount > 0 && (data->sourceFrameCounts == NULL || data->sourceFrameTimes == NULL || data->sourceDurations == NULL)))
     { GLBDataFree(data); snprintf(errMsg, errMsgSize, "Error: Out of memory while loading animation timing for '%s'", filename); printf("ERROR: %s\n", errMsg); return false; }
     for (int a = 0; a < data->animCount; a++)
     { data->sourceFrameCounts[a] = data->animations[a].keyframeCount; data->sourceFrameTimes[a] = data->frameTime; data->sourceDurations[a] = (data->animations[a].keyframeCount - 1) * data->frameTime; }

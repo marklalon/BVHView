@@ -229,7 +229,15 @@ static bool LoadIntoSlot(CharacterData* data, int slot, const char* path, char* 
                 data->scales[slot] = height > 10.0f ? 0.01f : 1.0f;
                 data->autoScales[slot] = 1.8f / height;
             }
-            else data->autoScales[slot] = 1.0f;
+            else
+            {
+                // No motion data: compute rest pose from joint offsets
+                TransformDataSampleFrame(&data->xformData[slot], &data->bvhData[slot], 0, 1.0f);
+                TransformDataForwardKinematics(&data->xformData[slot]);
+                float height = TransformDataGetMaxHeight(&data->xformData[slot]);
+                data->scales[slot] = height > 10.0f ? 0.01f : 1.0f;
+                data->autoScales[slot] = (height > 0.0f) ? 1.8f / height : 1.0f;
+            }
             // Joint names combo
             int comboTotalSize = 0;
             for (int i = 0; i < data->bvhData[slot].jointCount; i++)

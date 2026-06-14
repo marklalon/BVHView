@@ -63,6 +63,16 @@ void TransformDataFree(TransformData* data)
 
 void TransformDataSampleFrame(TransformData* data, BVHData* bvh, int frame, float scale)
 {
+    // No motion data: use joint offsets as rest pose
+    if (bvh->frameCount == 0)
+    {
+        for (int i = 0; i < bvh->jointCount; i++)
+        {
+            data->localPositions[i] = Vector3Scale(bvh->joints[i].offset, scale);
+            data->localRotations[i] = QuaternionIdentity();
+        }
+        return;
+    }
     frame = frame < 0 ? 0 : frame >= bvh->frameCount ? bvh->frameCount - 1 : frame;
     int offset = 0;
     for (int i = 0; i < bvh->jointCount; i++) {
@@ -147,9 +157,80 @@ float TransformDataGetMaxHeight(TransformData* data)
 // GLB exact sampling helpers (declared in glb_data.h, used here)
 // These are now non-static and declared in glb_data.h
 
+// ---- FK and pose-conversion helpers ----
+
+static void TransformDataComputeGLBSourceFK(GLBData* glb, int boneCount)
+{
+    for (int sortedIdx = 0; sortedIdx < boneCount; sortedIdx++)
+    {
+        int boneIdx = glb->topoOrder[sortedIdx];
+        int parentIdx = glb->model.skeleton.bones[boneIdx].parent;
+        Transform local = glb->sourceLocalPose[boneIdx];
+        if (parentIdx == -1)
+        {
+            Transform root = glb->sourceRootPose[boneIdx];
+            glb->sourceGlobalPose[boneIdx].rotation = QuaternionNormalize(QuaternionMultiply(root.rotation, local.rotation));
+            glb->sourceGlobalPose[boneIdx].scale = Vector3Multiply(local.scale, root.scale);
+            glb->sourceGlobalPose[boneIdx].translation = Vector3Multiply(local.translation, root.scale);
+            glb->sourceGlobalPose[boneIdx].translation = Vector3RotateByQuaternion(glb->sourceGlobalPose[boneIdx].translation, root.rotation);
+            glb->sourceGlobalPose[boneIdx].translation = Vector3Add(glb->sourceGlobalPose[boneIdx].translation, root.translation);
+        }
+        else
+        {
+            Transform parent = glb->sourceGlobalPose[parentIdx];
+            glb->sourceGlobalPose[boneIdx].rotation = QuaternionNormalize(QuaternionMultiply(parent.rotation, local.rotation));
+            glb->sourceGlobalPose[boneIdx].scale = Vector3Multiply(local.scale, parent.scale);
+            glb->sourceGlobalPose[boneIdx].translation = Vector3Multiply(local.translation, parent.scale);
+            glb->sourceGlobalPose[boneIdx].translation = Vector3RotateByQuaternion(glb->sourceGlobalPose[boneIdx].translation, parent.rotation);
+            glb->sourceGlobalPose[boneIdx].translation = Vector3Add(glb->sourceGlobalPose[boneIdx].translation, parent.translation);
+        }
+    }
+}
+
+static void TransformDataGlobalPoseToLocal(TransformData* data, int boneCount, const int* topoOrder,
+                                            const Transform* globalPose, float scale)
+{
+    int n = data->jointCount;
+    if (n > boneCount) n = boneCount;
+    for (int i = 0; i < n; i++)
+    {
+        int orig = topoOrder[i];
+        Vector3 gPos = globalPose[orig].translation;
+        Quaternion gRot = globalPose[orig].rotation;
+        int parent = data->parents[i];
+        if (parent == -1)
+        {
+            data->localPositions[i] = Vector3Scale(gPos, scale);
+            data->localRotations[i] = gRot;
+        }
+        else
+        {
+            int origParent = topoOrder[parent];
+            Vector3 pPos = globalPose[origParent].translation;
+            Quaternion pRot = globalPose[origParent].rotation;
+            Quaternion invPRot = QuaternionInvert(pRot);
+            Vector3 delta = Vector3Subtract(gPos, pPos);
+            data->localPositions[i] = Vector3Scale(Vector3RotateByQuaternion(delta, invPRot), scale);
+            data->localRotations[i] = QuaternionNormalize(QuaternionMultiply(invPRot, gRot));
+        }
+    }
+}
+
 static bool TransformDataSampleFrameGLBExact(TransformData* data, GLBData* glb, float time, float scale)
 {
-    if (glb->animCount == 0) return false;
+    // No animations: use rest pose directly for static preview
+    if (glb->animCount == 0)
+    {
+        if (glb->sourceRestPose == NULL || glb->sourceGlobalPose == NULL || glb->topoOrder == NULL) return false;
+        int boneCount = glb->model.skeleton.boneCount;
+        for (int boneIdx = 0; boneIdx < boneCount; boneIdx++)
+            glb->sourceLocalPose[boneIdx] = glb->sourceRestPose[boneIdx];
+        TransformDataComputeGLBSourceFK(glb, boneCount);
+        GLBDataUpdateModelPose(glb, glb->sourceGlobalPose);
+        TransformDataGlobalPoseToLocal(data, boneCount, glb->topoOrder, glb->sourceGlobalPose, scale);
+        return true;
+    }
+
     if (glb->sourceData == NULL || glb->sourceSkin == NULL) return false;
     if (glb->sourceRestPose == NULL || glb->sourceLocalPose == NULL || glb->sourceGlobalPose == NULL || glb->sourceRootPose == NULL) return false;
     if (glb->topoOrder == NULL) return false;
@@ -182,62 +263,24 @@ static bool TransformDataSampleFrameGLBExact(TransformData* data, GLBData* glb, 
             default: break;
         }
     }
-    for (int sortedIdx = 0; sortedIdx < boneCount; sortedIdx++)
-    {
-        int boneIdx = glb->topoOrder[sortedIdx];
-        int parentIdx = glb->model.skeleton.bones[boneIdx].parent;
-        Transform localPose = glb->sourceLocalPose[boneIdx];
-        if (parentIdx == -1)
-        {
-            Transform rootPose = glb->sourceRootPose[boneIdx];
-            glb->sourceGlobalPose[boneIdx].rotation = QuaternionNormalize(QuaternionMultiply(rootPose.rotation, localPose.rotation));
-            glb->sourceGlobalPose[boneIdx].scale = Vector3Multiply(localPose.scale, rootPose.scale);
-            glb->sourceGlobalPose[boneIdx].translation = Vector3Multiply(localPose.translation, rootPose.scale);
-            glb->sourceGlobalPose[boneIdx].translation = Vector3RotateByQuaternion(glb->sourceGlobalPose[boneIdx].translation, rootPose.rotation);
-            glb->sourceGlobalPose[boneIdx].translation = Vector3Add(glb->sourceGlobalPose[boneIdx].translation, rootPose.translation);
-        }
-        else
-        {
-            Transform parentPose = glb->sourceGlobalPose[parentIdx];
-            glb->sourceGlobalPose[boneIdx].rotation = QuaternionNormalize(QuaternionMultiply(parentPose.rotation, localPose.rotation));
-            glb->sourceGlobalPose[boneIdx].scale = Vector3Multiply(localPose.scale, parentPose.scale);
-            glb->sourceGlobalPose[boneIdx].translation = Vector3Multiply(localPose.translation, parentPose.scale);
-            glb->sourceGlobalPose[boneIdx].translation = Vector3RotateByQuaternion(glb->sourceGlobalPose[boneIdx].translation, parentPose.rotation);
-            glb->sourceGlobalPose[boneIdx].translation = Vector3Add(glb->sourceGlobalPose[boneIdx].translation, parentPose.translation);
-        }
-    }
+    TransformDataComputeGLBSourceFK(glb, boneCount);
     GLBDataUpdateModelPose(glb, glb->sourceGlobalPose);
-    int n = data->jointCount;
-    if (n > boneCount) n = boneCount;
-    for (int i = 0; i < n; i++)
-    {
-        int orig = glb->topoOrder[i];
-        Vector3 gPos = glb->sourceGlobalPose[orig].translation;
-        Quaternion gRot = glb->sourceGlobalPose[orig].rotation;
-        int parent = data->parents[i];
-        if (parent == -1)
-        {
-            data->localPositions[i] = Vector3Scale(gPos, scale);
-            data->localRotations[i] = gRot;
-        }
-        else
-        {
-            int origParent = glb->topoOrder[parent];
-            Vector3 pPos = glb->sourceGlobalPose[origParent].translation;
-            Quaternion pRot = glb->sourceGlobalPose[origParent].rotation;
-            Quaternion invPRot = QuaternionInvert(pRot);
-            Vector3 delta = Vector3Subtract(gPos, pPos);
-            data->localPositions[i] = Vector3Scale(Vector3RotateByQuaternion(delta, invPRot), scale);
-            data->localRotations[i] = QuaternionNormalize(QuaternionMultiply(invPRot, gRot));
-        }
-    }
+    TransformDataGlobalPoseToLocal(data, boneCount, glb->topoOrder, glb->sourceGlobalPose, scale);
     return true;
 }
 
 void TransformDataSampleFrameGLB(TransformData* data, GLBData* glb, float time, float scale)
 {
     if (TransformDataSampleFrameGLBExact(data, glb, time, scale)) return;
-    if (glb->animCount == 0) return;
+
+    // No animations: use model's current bind-pose (rest pose) directly
+    if (glb->animCount == 0)
+    {
+        if (glb->model.currentPose == NULL || glb->model.boneMatrices == NULL || glb->topoOrder == NULL) return;
+        TransformDataGlobalPoseToLocal(data, glb->model.skeleton.boneCount, glb->topoOrder, glb->model.currentPose, scale);
+        return;
+    }
+
     if (glb->model.currentPose == NULL) return;
     if (glb->model.boneMatrices == NULL) return;
     if (glb->topoOrder == NULL) return;
@@ -248,28 +291,5 @@ void TransformDataSampleFrameGLB(TransformData* data, GLBData* glb, float time, 
     if (frameClamped < 0.0f) frameClamped = 0.0f;
     if (frameClamped > (float)(anim.keyframeCount - 1)) frameClamped = (float)(anim.keyframeCount - 1);
     UpdateModelAnimation(glb->model, anim, frameClamped);
-    int n = data->jointCount;
-    if (n > glb->model.skeleton.boneCount) n = glb->model.skeleton.boneCount;
-    for (int i = 0; i < n; i++)
-    {
-        int orig = glb->topoOrder[i];
-        Vector3 gPos = glb->model.currentPose[orig].translation;
-        Quaternion gRot = glb->model.currentPose[orig].rotation;
-        int parent = data->parents[i];
-        if (parent == -1)
-        {
-            data->localPositions[i] = Vector3Scale(gPos, scale);
-            data->localRotations[i] = gRot;
-        }
-        else
-        {
-            int origParent = glb->topoOrder[parent];
-            Vector3 pPos = glb->model.currentPose[origParent].translation;
-            Quaternion pRot = glb->model.currentPose[origParent].rotation;
-            Quaternion invPRot = QuaternionInvert(pRot);
-            Vector3 delta = Vector3Subtract(gPos, pPos);
-            data->localPositions[i] = Vector3Scale(Vector3RotateByQuaternion(delta, invPRot), scale);
-            data->localRotations[i] = QuaternionNormalize(QuaternionMultiply(invPRot, gRot));
-        }
-    }
+    TransformDataGlobalPoseToLocal(data, glb->model.skeleton.boneCount, glb->topoOrder, glb->model.currentPose, scale);
 }

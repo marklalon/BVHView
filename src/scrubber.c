@@ -61,8 +61,11 @@ void ScrubberSettingsRecomputeLimits(ScrubberSettings* settings, CharacterData* 
     {
         int frameCount = ScrubberGetFrameCount(characterData, i);
         float frameTime = ScrubberGetFrameTime(characterData, i);
-        settings->frameLimit = MaxInt(settings->frameLimit, frameCount - 1);
-        settings->timeLimit = Max(settings->timeLimit, (frameCount - 1) * frameTime);
+        if (frameCount > 0)
+        {
+            settings->frameLimit = MaxInt(settings->frameLimit, frameCount - 1);
+            settings->timeLimit = Max(settings->timeLimit, (frameCount - 1) * frameTime);
+        }
     }
 }
 
@@ -71,7 +74,7 @@ void ScrubberSettingsInitMaxs(ScrubberSettings* settings, CharacterData* charact
     if (characterData->count == 0) return;
     int frameCount = ScrubberGetFrameCount(characterData, characterData->active);
     float frameTime = ScrubberGetFrameTime(characterData, characterData->active);
-    settings->frameMax = frameCount - 1;
+    settings->frameMax = (frameCount > 0) ? frameCount - 1 : 0;
     settings->frameMaxSelect = settings->frameMax;
     settings->timeMax = settings->frameMax * frameTime;
     settings->frameMin = 0;
