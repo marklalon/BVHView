@@ -232,43 +232,73 @@ void GuiCustomGroupBox(Rectangle bounds, const char* text)
 
 void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterData, int argc, char** argv)
 {
-    GuiCustomGroupBox((Rectangle){ 20, 10, 190, 240 }, "Camera");
-    GuiLabel((Rectangle){ 30, 30, 150, 20 }, TextFormat("Target: [% 5.3f % 5.3f % 5.3f]", camera->cam3d.target.x, camera->cam3d.target.y, camera->cam3d.target.z));
-    GuiLabel((Rectangle){ 30, 50, 150, 20 }, TextFormat("Offset: [% 5.3f % 5.3f % 5.3f]", camera->offset.x, camera->offset.y, camera->offset.z));
-    GuiLabel((Rectangle){ 30, 70, 150, 20 }, TextFormat("Azimuth: %5.3f", camera->azimuth));
-    GuiLabel((Rectangle){ 30, 90, 150, 20 }, TextFormat("Altitude: %5.3f", camera->altitude));
-    GuiLabel((Rectangle){ 30, 110, 150, 20 }, TextFormat("Distance: %5.3f", camera->distance));
-    if (GuiButton((Rectangle){ 30, 130, 100, 20 }, "Reset"))
+    GuiCustomGroupBox((Rectangle){ 20, 10, 190, 240 }, "Info");
+
+    int ci = characterData->active;
+    bool hasCharacter = characterData->count > 0 && ci >= 0 && ci < characterData->count;
+    int jointCount = hasCharacter ? characterData->xformData[ci].jointCount : 0;
+
+    // Target: world-space position of the currently selected skeleton joint.
+    int sel = camera->selectedBone;
+    if (hasCharacter && jointCount > 0 && sel >= 0 && sel < jointCount)
+    {
+        Vector3 p = characterData->xformData[ci].globalPositions[sel];
+        GuiLabel((Rectangle){ 30, 30, 170, 20 }, TextFormat("Target: [% 5.3f % 5.3f % 5.3f]", p.x, p.y, p.z));
+    }
+    else
+    {
+        GuiLabel((Rectangle){ 30, 30, 170, 20 }, "Target: None");
+    }
+
+    // Vertex / Face counts: only meaningful for GLB models that carry a mesh.
+    if (hasCharacter && characterData->isGLB[ci] && characterData->glbData[ci].model.meshCount > 0)
+    {
+        const Model* model = &characterData->glbData[ci].model;
+        int vertexCount = 0;
+        int faceCount = 0;
+        for (int m = 0; m < model->meshCount; m++)
+        {
+            vertexCount += model->meshes[m].vertexCount;
+            faceCount += model->meshes[m].triangleCount;
+        }
+        GuiLabel((Rectangle){ 30, 50, 170, 20 }, TextFormat("Vertex: %d", vertexCount));
+        GuiLabel((Rectangle){ 30, 70, 170, 20 }, TextFormat("Face: %d", faceCount));
+    }
+    else
+    {
+        GuiLabel((Rectangle){ 30, 50, 170, 20 }, "Vertex: None");
+        GuiLabel((Rectangle){ 30, 70, 170, 20 }, "Face: None");
+    }
+
+    if (GuiButton((Rectangle){ 30, 100, 100, 20 }, "Reset"))
     {
         camera->azimuth = ArgFloat(argc, argv, "cameraAzimuth", 0.0f);
         camera->altitude = ArgFloat(argc, argv, "cameraAltitude", 0.4f);
         camera->distance = ArgFloat(argc, argv, "cameraDistance", 4.0f);
         camera->offset = ArgVector3(argc, argv, "cameraOffset", Vector3Zero());
-        camera->track = ArgBool(argc, argv, "cameraTrack", true);
+        camera->track = ArgBool(argc, argv, "cameraTrack", false);
         camera->trackBone = ArgInt(argc, argv, "cameraTrackBone", 0);
     }
-    if (characterData->count > 0)
+
+    // Skeleton/animation controls are meaningless for mesh-only GLBs (no joints),
+    // so only show the track/skeleton UI when the active character has a skeleton.
+    if (hasCharacter && jointCount > 0)
     {
-        GuiToggle((Rectangle){ 30, 160, 100, 20 }, "Track", &camera->track);
+        GuiToggle((Rectangle){ 30, 130, 100, 20 }, "Track", &camera->track);
         bool skeletonToggle = camera->showSkeletonPanel;
-        GuiToggle((Rectangle){ 30, 190, 100, 20 }, "Skeleton", &skeletonToggle);
-        int ci = characterData->active;
-        if (ci >= 0 && ci < characterData->count)
-        {
-            int jointCount = characterData->xformData[ci].jointCount;
-            int sel = camera->selectedBone;
-            if (sel < 0) sel = 0;
-            if (sel >= jointCount) sel = jointCount - 1;
-            char jointText[32];
-            snprintf(jointText, sizeof(jointText), "%d/%d", sel + 1, jointCount);
-            DrawText(jointText, 135, 195, 10, (Color){ 153, 153, 153, 255 });
-        }
-        if (ci >= 0 && ci < characterData->count && camera->selectedBone >= 0 && camera->selectedBone < characterData->xformData[ci].jointCount)
+        GuiToggle((Rectangle){ 30, 160, 100, 20 }, "Skeleton", &skeletonToggle);
+        int bsel = camera->selectedBone;
+        if (bsel < 0) bsel = 0;
+        if (bsel >= jointCount) bsel = jointCount - 1;
+        char jointText[32];
+        snprintf(jointText, sizeof(jointText), "%d/%d", bsel + 1, jointCount);
+        DrawText(jointText, 135, 165, 10, (Color){ 153, 153, 153, 255 });
+        if (camera->selectedBone >= 0 && camera->selectedBone < jointCount)
         {
             const char* boneName = characterData->isGLB[ci]
                 ? characterData->glbData[ci].model.skeleton.bones[characterData->glbData[ci].topoOrder[camera->selectedBone]].name
                 : characterData->bvhData[ci].joints[camera->selectedBone].name;
-            DrawText(boneName, 50, 220, 10, GOLD);
+            DrawText(boneName, 50, 190, 10, GOLD);
         }
         if (skeletonToggle != camera->showSkeletonPanel)
         {
@@ -291,6 +321,7 @@ void GuiSkeletonPanel(OrbitCamera* camera, CharacterData* characterData, int scr
     if (ci < 0 || ci >= characterData->count) return;
     TransformData* xform = &characterData->xformData[ci];
     int jointCount = xform->jointCount;
+    if (jointCount <= 0) return; // mesh-only GLB has no skeleton to display
     const int* boneParents = xform->parents;
     static const char* s_names[1024];
     const char** names = s_names;
@@ -601,7 +632,7 @@ void GuiScrubberSettings(ScrubberSettings* settings, CharacterData* characterDat
     }
     else
     {
-        GuiLabel((Rectangle){ screenWidth / 2 + 530, screenHeight - 80, 120, 20 }, "(no animation)");
+        GuiLabel((Rectangle){ screenWidth / 2 + 470, screenHeight - 80, 120, 20 }, "(no animation)");
     }
     Rectangle sliderRect = { screenWidth / 2 - 540, screenHeight - 50, 1080, 20 };
     float frameFloatPrev = settings->frameSnap ? (float)frame : settings->playTime / frameTime;

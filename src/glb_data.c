@@ -509,28 +509,40 @@ bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSi
     if (ext == NULL || (strcmp(ext, ".glb") != 0 && strcmp(ext, ".GLB") != 0 && strcmp(ext, ".gltf") != 0 && strcmp(ext, ".GLTF") != 0))
     { snprintf(errMsg, errMsgSize, "Error: File '%s' is not a .glb/.gltf file", filename); return false; }
     data->model = LoadModel(filename);
-    if (data->model.skeleton.boneCount == 0)
-    { if (data->model.meshCount > 0) UnloadModel(data->model); snprintf(errMsg, errMsgSize, "Error: Model '%s' has no skeleton (no bones)", filename); printf("ERROR: %s\n", errMsg); return false; }
+    int bc = data->model.skeleton.boneCount;
+    // A file with neither bones nor a mesh has nothing to display.
+    if (bc == 0 && data->model.meshCount == 0)
+    { snprintf(errMsg, errMsgSize, "Error: Model '%s' has no skeleton and no mesh", filename); printf("ERROR: %s\n", errMsg); return false; }
     data->animations = LoadModelAnimations(filename, &data->animCount);
     data->activeAnim = 0;
     data->frameTime = 1.0f / 60.0f;
-    // Allow loading models without animations (static preview in rest pose)
-    if (data->animCount > 0)
+    // Mesh-only models (no skeleton) are supported for static mesh preview: skip all
+    // skeleton/animation setup and fall through to material/texture loading below.
+    if (bc == 0)
     {
-        data->sourceFrameCounts = (int*)malloc(data->animCount * sizeof(int));
-        data->sourceFrameTimes = (float*)malloc(data->animCount * sizeof(float));
-        data->sourceDurations = (float*)malloc(data->animCount * sizeof(float));
+        if (data->animations != NULL) { UnloadModelAnimations(data->animations, data->animCount); data->animations = NULL; }
+        data->animCount = 0;
+        printf("INFO: GLB '%s' has no skeleton - loading as mesh-only preview\n", filename);
     }
-    int bc = data->model.skeleton.boneCount;
-    data->sourceRestPose = (Transform*)malloc(bc * sizeof(Transform));
-    data->sourceLocalPose = (Transform*)malloc(bc * sizeof(Transform));
-    data->sourceGlobalPose = (Transform*)malloc(bc * sizeof(Transform));
-    data->sourceRootPose = (Transform*)malloc(bc * sizeof(Transform));
-    if (data->sourceRestPose == NULL || data->sourceLocalPose == NULL || data->sourceGlobalPose == NULL || data->sourceRootPose == NULL
-        || (data->animCount > 0 && (data->sourceFrameCounts == NULL || data->sourceFrameTimes == NULL || data->sourceDurations == NULL)))
-    { GLBDataFree(data); snprintf(errMsg, errMsgSize, "Error: Out of memory while loading animation timing for '%s'", filename); printf("ERROR: %s\n", errMsg); return false; }
-    for (int a = 0; a < data->animCount; a++)
-    { data->sourceFrameCounts[a] = data->animations[a].keyframeCount; data->sourceFrameTimes[a] = data->frameTime; data->sourceDurations[a] = (data->animations[a].keyframeCount - 1) * data->frameTime; }
+    else
+    {
+        // Allow loading models without animations (static preview in rest pose)
+        if (data->animCount > 0)
+        {
+            data->sourceFrameCounts = (int*)malloc(data->animCount * sizeof(int));
+            data->sourceFrameTimes = (float*)malloc(data->animCount * sizeof(float));
+            data->sourceDurations = (float*)malloc(data->animCount * sizeof(float));
+        }
+        data->sourceRestPose = (Transform*)malloc(bc * sizeof(Transform));
+        data->sourceLocalPose = (Transform*)malloc(bc * sizeof(Transform));
+        data->sourceGlobalPose = (Transform*)malloc(bc * sizeof(Transform));
+        data->sourceRootPose = (Transform*)malloc(bc * sizeof(Transform));
+        if (data->sourceRestPose == NULL || data->sourceLocalPose == NULL || data->sourceGlobalPose == NULL || data->sourceRootPose == NULL
+            || (data->animCount > 0 && (data->sourceFrameCounts == NULL || data->sourceFrameTimes == NULL || data->sourceDurations == NULL)))
+        { GLBDataFree(data); snprintf(errMsg, errMsgSize, "Error: Out of memory while loading animation timing for '%s'", filename); printf("ERROR: %s\n", errMsg); return false; }
+        for (int a = 0; a < data->animCount; a++)
+        { data->sourceFrameCounts[a] = data->animations[a].keyframeCount; data->sourceFrameTimes[a] = data->frameTime; data->sourceDurations[a] = (data->animations[a].keyframeCount - 1) * data->frameTime; }
+    }
     GLBDataLoadSourceTiming(data, filename);
 
     // Parse per-material alpha info from GLTF materials
@@ -623,9 +635,12 @@ bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSi
             }
         }
     }
-    data->topoOrder = (int*)malloc(bc * sizeof(int));
-    data->invTopoOrder = (int*)malloc(bc * sizeof(int));
-    ComputeTopoOrder(bc, data->model.skeleton.bones, data->topoOrder, data->invTopoOrder);
+    if (bc > 0)
+    {
+        data->topoOrder = (int*)malloc(bc * sizeof(int));
+        data->invTopoOrder = (int*)malloc(bc * sizeof(int));
+        ComputeTopoOrder(bc, data->model.skeleton.bones, data->topoOrder, data->invTopoOrder);
+    }
     printf("INFO: Loaded '%s' - %d bones, %d animations\n", filename, bc, data->animCount);
     return true;
 }

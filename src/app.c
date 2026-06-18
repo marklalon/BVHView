@@ -127,7 +127,7 @@ void OrbitCameraInit(OrbitCamera* camera, int argc, char** argv)
     camera->altitude = ArgFloat(argc, argv, "cameraAltitude", 0.4f);
     camera->distance = ArgFloat(argc, argv, "cameraDistance", 4.0f);
     camera->offset = ArgVector3(argc, argv, "cameraOffset", Vector3Zero());
-    camera->track = ArgBool(argc, argv, "cameraTrack", true);
+    camera->track = ArgBool(argc, argv, "cameraTrack", false);
     camera->trackBone = ArgInt(argc, argv, "cameraTrackBone", 0);
     camera->showSkeletonPanel = false;
     camera->selectedBone = 0;
@@ -376,7 +376,7 @@ void OnFileLoaded(ApplicationState* app)
     // Build file list first so we know the count/index for the title suffix
     BuildFileList(app, app->characterData.filePaths[app->characterData.active]);
 
-    char windowTitle[528];
+    char windowTitle[600];
     if (app->fileListCount > 1)
     {
         snprintf(windowTitle, sizeof(windowTitle), "%s (%d/%d) - BVHView",
@@ -557,7 +557,7 @@ void ApplicationUpdate(void* voidApplicationState)
                         ScrubberSettingsRecomputeLimits(&app->scrubberSettings, &app->characterData);
                         ScrubberSettingsInitMaxs(&app->scrubberSettings, &app->characterData);
 
-                        char windowTitle[528];
+                        char windowTitle[600];
                         snprintf(windowTitle, sizeof(windowTitle), "%s (%d/%d) - BVHView",
                                  app->characterData.filePaths[activeSlot],
                                  app->fileListIndex + 1,

@@ -197,13 +197,25 @@ static bool LoadIntoSlot(CharacterData* data, int slot, const char* path, char* 
             if (j > 0) strcat(data->jointNamesCombo[slot], ";");
             strcat(data->jointNamesCombo[slot], glb->model.skeleton.bones[glb->topoOrder[j]].name);
         }
-        TransformDataSampleFrameGLB(&data->xformData[slot], glb, 0, 1.0f);
-        TransformDataForwardKinematics(&data->xformData[slot]);
-        float height = TransformDataGetMaxHeight(&data->xformData[slot]);
-        data->scales[slot] = height > 10.0f ? 0.01f : 1.0f;
-        data->autoScales[slot] = 1.8f / height;
-        TransformDataSampleFrameGLB(&data->xformData[slot], glb, 0, data->scales[slot]);
-        TransformDataForwardKinematics(&data->xformData[slot]);
+        if (jointCount > 0)
+        {
+            TransformDataSampleFrameGLB(&data->xformData[slot], glb, 0, 1.0f);
+            TransformDataForwardKinematics(&data->xformData[slot]);
+            float height = TransformDataGetMaxHeight(&data->xformData[slot]);
+            data->scales[slot] = height > 10.0f ? 0.01f : 1.0f;
+            data->autoScales[slot] = 1.8f / height;
+            TransformDataSampleFrameGLB(&data->xformData[slot], glb, 0, data->scales[slot]);
+            TransformDataForwardKinematics(&data->xformData[slot]);
+        }
+        else
+        {
+            // Mesh-only GLB (no skeleton): derive scale from the mesh bounding box,
+            // since there are no joints to measure a character height from.
+            BoundingBox bounds = GetModelBoundingBox(glb->model);
+            float maxDim = Max(bounds.max.x - bounds.min.x, Max(bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z));
+            data->scales[slot] = maxDim > 10.0f ? 0.01f : 1.0f;
+            data->autoScales[slot] = (maxDim > 1e-6f) ? 1.8f / maxDim : 1.0f;
+        }
         data->visible[slot] = true;
         if (glb->model.meshCount > 0) data->hasSkinnedMesh = true;
         return true;
