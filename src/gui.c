@@ -93,9 +93,9 @@ void GuiInitDarkMode(void)
     GuiSetStyle(CHECKBOX, BORDER_COLOR_PRESSED, (int)cFocus);
     GuiSetStyle(CHECKBOX, BASE_COLOR_PRESSED, (int)cActive);
     GuiSetStyle(CHECKBOX, TEXT_COLOR_PRESSED, (int)cText);
-    GuiSetStyle(CHECKBOX, BORDER_COLOR_DISABLED, (int)cBorder);
+    GuiSetStyle(CHECKBOX, BORDER_COLOR_DISABLED, (int)ColorToInt((Color){ 74, 75, 78, 255 }));  // dim border
     GuiSetStyle(CHECKBOX, BASE_COLOR_DISABLED, (int)cInner);
-    GuiSetStyle(CHECKBOX, TEXT_COLOR_DISABLED, (int)cText);
+    GuiSetStyle(CHECKBOX, TEXT_COLOR_DISABLED, (int)ColorToInt((Color){ 112, 112, 115, 255 })); // dim text
     GuiSetStyle(CHECKBOX, BORDER_WIDTH, 1);
     GuiSetStyle(CHECKBOX, CHECK_PADDING, 4);
 
@@ -143,7 +143,8 @@ void GuiInitDarkMode(void)
     GuiSetStyle(LABEL, TEXT_COLOR_PRESSED, (int)cText);
     GuiSetStyle(LABEL, BORDER_COLOR_DISABLED, (int)cBorder);
     GuiSetStyle(LABEL, BASE_COLOR_DISABLED, (int)cInner);
-    GuiSetStyle(LABEL, TEXT_COLOR_DISABLED, (int)cText);
+    // CheckBox/Toggle labels are drawn with the LABEL disabled text color, so dim it to make disabled controls visibly greyed out
+    GuiSetStyle(LABEL, TEXT_COLOR_DISABLED, (int)ColorToInt((Color){ 112, 112, 115, 255 })); // dim text
     GuiSetStyle(LABEL, BORDER_WIDTH, 1);
 
     // SCROLLBAR (used by ScrollPanel)
@@ -450,7 +451,7 @@ void GuiSkeletonPanel(OrbitCamera* camera, CharacterData* characterData, int scr
     }
 }
 
-void GuiRenderSettings(RenderSettings* settings, CapsuleData* capsuleData, int screenWidth, int screenHeight)
+void GuiRenderSettings(RenderSettings* settings, CapsuleData* capsuleData, bool bindPoseAvailable, int screenWidth, int screenHeight)
 {
     GuiCustomGroupBox((Rectangle){ screenWidth - 270, 10, 250, 480 }, "Rendering");
     GuiSliderBar((Rectangle){ screenWidth - 170, 30, 100, 20 }, "Exposure", TextFormat("%5.2f", settings->exposure), &settings->exposure, 0.0f, 3.0f);
@@ -476,7 +477,10 @@ void GuiRenderSettings(RenderSettings* settings, CapsuleData* capsuleData, int s
     GuiCheckBox((Rectangle){ screenWidth - 260, 420, 20, 20 }, "Draw End Sites", &settings->drawEndSites);
     GuiCheckBox((Rectangle){ screenWidth - 140, 420, 20, 20 }, "Draw FPS", &settings->drawFPS);
     GuiCheckBox((Rectangle){ screenWidth - 260, 450, 20, 20 }, "Draw Texture", &settings->drawTexture);
-    GuiLabel((Rectangle){ screenWidth - 140, 450, 100, 20 }, "H Key - Hide UI");
+    // Bind/rest pose only exists for GLB; BVH has no separately-stored bind pose, so disable it there
+    if (!bindPoseAvailable) GuiDisable();
+    GuiCheckBox((Rectangle){ screenWidth - 140, 450, 20, 20 }, "Bind Pose", &settings->drawBindPose);
+    if (!bindPoseAvailable) GuiEnable();
 }
 
 void GuiCharacterData(CharacterData* characterData, GuiWindowFileDialogState* fileDialogState, ScrubberSettings* scrubberSettings, char* errMsg, int argc, char** argv)

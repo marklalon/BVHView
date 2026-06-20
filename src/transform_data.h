@@ -34,6 +34,9 @@ void TransformDataSampleFrameCubic(TransformData* data, TransformData* tmp0, Tra
 // GLB sampling
 void TransformDataSampleFrameGLB(TransformData* data, GLBData* glb, float time, float scale);
 
+// Bind / rest pose sampling (GLB only; BVH has no separately-stored bind pose)
+void TransformDataSampleRestPoseGLB(TransformData* data, GLBData* glb, float scale);
+
 // Forward kinematics
 void TransformDataForwardKinematics(TransformData* data);
 

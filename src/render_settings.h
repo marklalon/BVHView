@@ -37,6 +37,7 @@ typedef struct RenderSettings {
     bool drawEndSites;
     bool drawFPS;
     bool drawTexture;
+    bool drawBindPose;
     bool drawUI;
 } RenderSettings;
 

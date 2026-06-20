@@ -216,19 +216,33 @@ static void TransformDataGlobalPoseToLocal(TransformData* data, int boneCount, c
     }
 }
 
+static bool TransformDataSampleRestPoseGLBExact(TransformData* data, GLBData* glb, float scale)
+{
+    if (glb->sourceRestPose == NULL || glb->sourceGlobalPose == NULL || glb->sourceLocalPose == NULL || glb->topoOrder == NULL) return false;
+    int boneCount = glb->model.skeleton.boneCount;
+    for (int boneIdx = 0; boneIdx < boneCount; boneIdx++)
+        glb->sourceLocalPose[boneIdx] = glb->sourceRestPose[boneIdx];
+    TransformDataComputeGLBSourceFK(glb, boneCount);
+    GLBDataUpdateModelPose(glb, glb->sourceGlobalPose);
+    TransformDataGlobalPoseToLocal(data, boneCount, glb->topoOrder, glb->sourceGlobalPose, scale);
+    return true;
+}
+
+void TransformDataSampleRestPoseGLB(TransformData* data, GLBData* glb, float scale)
+{
+    if (TransformDataSampleRestPoseGLBExact(data, glb, scale)) return;
+
+    // Fallback: use the model's current bind-pose directly
+    if (glb->model.currentPose == NULL || glb->model.boneMatrices == NULL || glb->topoOrder == NULL) return;
+    TransformDataGlobalPoseToLocal(data, glb->model.skeleton.boneCount, glb->topoOrder, glb->model.currentPose, scale);
+}
+
 static bool TransformDataSampleFrameGLBExact(TransformData* data, GLBData* glb, float time, float scale)
 {
     // No animations: use rest pose directly for static preview
     if (glb->animCount == 0)
     {
-        if (glb->sourceRestPose == NULL || glb->sourceGlobalPose == NULL || glb->topoOrder == NULL) return false;
-        int boneCount = glb->model.skeleton.boneCount;
-        for (int boneIdx = 0; boneIdx < boneCount; boneIdx++)
-            glb->sourceLocalPose[boneIdx] = glb->sourceRestPose[boneIdx];
-        TransformDataComputeGLBSourceFK(glb, boneCount);
-        GLBDataUpdateModelPose(glb, glb->sourceGlobalPose);
-        TransformDataGlobalPoseToLocal(data, boneCount, glb->topoOrder, glb->sourceGlobalPose, scale);
-        return true;
+        return TransformDataSampleRestPoseGLBExact(data, glb, scale);
     }
 
     if (glb->sourceData == NULL || glb->sourceSkin == NULL) return false;

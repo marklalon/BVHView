@@ -35,5 +35,6 @@ void RenderSettingsInit(RenderSettings* settings, int argc, char** argv)
     settings->drawEndSites = ArgBool(argc, argv, "drawEndSites", true);
     settings->drawFPS = ArgBool(argc, argv, "drawFPS", false);
     settings->drawTexture = ArgBool(argc, argv, "drawTexture", true);
+    settings->drawBindPose = ArgBool(argc, argv, "drawBindPose", false);
     settings->drawUI = ArgBool(argc, argv, "drawUI", true);
 }

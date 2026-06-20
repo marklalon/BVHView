@@ -661,6 +661,15 @@ void ApplicationUpdate(void* voidApplicationState)
 
     PROFILE_BEGIN(Update);
 
+    // Bind/rest pose only exists for GLB; force it off whenever the active file is BVH
+    bool bindPoseAvailable = app->characterData.count > 0 && app->characterData.isGLB[app->characterData.active];
+    if (!bindPoseAvailable)
+        app->renderSettings.drawBindPose = false;
+
+    // Bind/Rest pose preview pauses the animation
+    if (app->renderSettings.drawBindPose)
+        app->scrubberSettings.playing = false;
+
     // Tick time forward
     if (app->scrubberSettings.playing)
     {
@@ -678,7 +687,11 @@ void ApplicationUpdate(void* voidApplicationState)
     for (int i = 0; i < app->characterData.count; i++)
     {
         if (!app->characterData.visible[i]) continue;
-        if (app->characterData.isGLB[i])
+        if (app->renderSettings.drawBindPose && app->characterData.isGLB[i])
+        {
+            TransformDataSampleRestPoseGLB(&app->characterData.xformData[i], &app->characterData.glbData[i], app->characterData.scales[i]);
+        }
+        else if (app->characterData.isGLB[i])
         {
             TransformDataSampleFrameGLB(&app->characterData.xformData[i], &app->characterData.glbData[i], app->scrubberSettings.playTime, app->characterData.scales[i]);
         }
@@ -985,7 +998,7 @@ void ApplicationUpdate(void* voidApplicationState)
         DrawText(app->errMsg, 250, 20, 15, RED);
         if (app->characterData.count == 0)
             DrawText("Drag and Drop .bvh / .glb / .gltf files to open them.", app->screenWidth / 2 - 370, app->screenHeight / 2 - 15, 30, DARKGRAY);
-        GuiRenderSettings(&app->renderSettings, &app->capsuleData, app->screenWidth, app->screenHeight);
+        GuiRenderSettings(&app->renderSettings, &app->capsuleData, bindPoseAvailable, app->screenWidth, app->screenHeight);
         if (app->renderSettings.drawFPS) DrawFPS(230, 10);
         GuiOrbitCamera(&app->camera, &app->characterData, app->argc, app->argv);
         if (app->camera.showSkeletonPanel) GuiSkeletonPanel(&app->camera, &app->characterData, app->screenWidth, app->screenHeight);
@@ -995,7 +1008,9 @@ void ApplicationUpdate(void* voidApplicationState)
             GuiCustomGroupBox((Rectangle){ app->screenWidth - 180, 500, 160, 150 }, "Color Picker");
             GuiColorPicker((Rectangle){ app->screenWidth - 165, 525, 110, 110 }, NULL, &app->characterData.colors[app->characterData.active]);
         }
-        GuiScrubberSettings(&app->scrubberSettings, &app->characterData, app->screenWidth, app->screenHeight);
+        // Bind/rest pose is a static preview, so hide the animation playback panel
+        if (!app->renderSettings.drawBindPose)
+            GuiScrubberSettings(&app->scrubberSettings, &app->characterData, app->screenWidth, app->screenHeight);
         if (app->fileDialogState.windowActive) GuiUnlock();
         GuiWindowFileDialog(&app->fileDialogState);
     }
