@@ -53,6 +53,20 @@ float ScrubberGetFrameTime(CharacterData* characterData, int index)
     return characterData->bvhData[index].frameTime;
 }
 
+bool ScrubberHasValidAnimation(CharacterData* characterData, int index)
+{
+    if (characterData->count <= 0 || index < 0 || index >= characterData->count)
+        return false;
+    // No skeleton → nothing to animate
+    if (characterData->xformData[index].jointCount <= 0)
+        return false;
+    // Animation too short to be meaningful (<= 2 frames)
+    int frameCount = ScrubberGetFrameCount(characterData, index);
+    if (frameCount <= 2)
+        return false;
+    return true;
+}
+
 void ScrubberSettingsRecomputeLimits(ScrubberSettings* settings, CharacterData* characterData)
 {
     settings->frameLimit = 0;

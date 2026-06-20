@@ -670,6 +670,10 @@ void ApplicationUpdate(void* voidApplicationState)
     if (app->renderSettings.drawBindPose)
         app->scrubberSettings.playing = false;
 
+    // No skeleton or animation too short → stop playback
+    if (!ScrubberHasValidAnimation(&app->characterData, app->characterData.active))
+        app->scrubberSettings.playing = false;
+
     // Tick time forward
     if (app->scrubberSettings.playing)
     {
@@ -1008,8 +1012,8 @@ void ApplicationUpdate(void* voidApplicationState)
             GuiCustomGroupBox((Rectangle){ app->screenWidth - 180, 500, 160, 150 }, "Color Picker");
             GuiColorPicker((Rectangle){ app->screenWidth - 165, 525, 110, 110 }, NULL, &app->characterData.colors[app->characterData.active]);
         }
-        // Bind/rest pose is a static preview, so hide the animation playback panel
-        if (!app->renderSettings.drawBindPose)
+        // Hide the animation playback panel when there's no meaningful animation
+        if (!app->renderSettings.drawBindPose && ScrubberHasValidAnimation(&app->characterData, app->characterData.active))
             GuiScrubberSettings(&app->scrubberSettings, &app->characterData, app->screenWidth, app->screenHeight);
         if (app->fileDialogState.windowActive) GuiUnlock();
         GuiWindowFileDialog(&app->fileDialogState);

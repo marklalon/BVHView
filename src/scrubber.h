@@ -35,6 +35,7 @@ typedef struct ScrubberSettings {
 void ScrubberSettingsInit(ScrubberSettings* settings, int argc, char** argv);
 int ScrubberGetFrameCount(CharacterData* characterData, int index);
 float ScrubberGetFrameTime(CharacterData* characterData, int index);
+bool ScrubberHasValidAnimation(CharacterData* characterData, int index);
 void ScrubberSettingsRecomputeLimits(ScrubberSettings* settings, CharacterData* characterData);
 void ScrubberSettingsInitMaxs(ScrubberSettings* settings, CharacterData* characterData);
 void ScrubberSettingsClamp(ScrubberSettings* settings, CharacterData* characterData);

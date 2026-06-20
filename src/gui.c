@@ -597,6 +597,7 @@ void GuiCharacterData(CharacterData* characterData, GuiWindowFileDialogState* fi
 void GuiScrubberSettings(ScrubberSettings* settings, CharacterData* characterData, int screenWidth, int screenHeight)
 {
     if (characterData->count == 0) return;
+    if (!ScrubberHasValidAnimation(characterData, characterData->active)) return;
     float frameTime = ScrubberGetFrameTime(characterData, characterData->active);
     GuiCustomGroupBox((Rectangle){ screenWidth / 2 - 600, screenHeight - 100, 1200, 90 }, "Scrubber");
     GuiLabel((Rectangle){ screenWidth / 2 - 480, screenHeight - 80, 150, 20 }, TextFormat("Frame Time: %f", frameTime));
