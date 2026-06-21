@@ -195,7 +195,7 @@ vec3 Unrotate(in vec4 q, vec3 v)
 float Checker(in vec2 uv)
 {
     vec4 uvDDXY = vec4(dFdx(uv), dFdy(uv));
-    vec2 w = vec2(length(uvDDXY.xz), length(uvDDXY.yw));
+    vec2 w = max(vec2(length(uvDDXY.xz), length(uvDDXY.yw)), vec2(1e-8));
     vec2 i = 2.0*(abs(fract((uv-0.5*w)*0.5)-0.5)-
                   abs(fract((uv+0.5*w)*0.5)-0.5))/w;
     return 0.5 - 0.5*i.x*i.y;
@@ -204,7 +204,7 @@ float Checker(in vec2 uv)
 float Grid(in vec2 uv, in float lineWidth)
 {
     vec4 uvDDXY = vec4(dFdx(uv), dFdy(uv));
-    vec2 uvDeriv = vec2(length(uvDDXY.xz), length(uvDDXY.yw));
+    vec2 uvDeriv = max(vec2(length(uvDDXY.xz), length(uvDDXY.yw)), vec2(1e-8));
     float targetWidth = lineWidth > 0.5 ? 1.0 - lineWidth : lineWidth;
     vec2 drawWidth = clamp(
         vec2(targetWidth, targetWidth), uvDeriv, vec2(0.5, 0.5));

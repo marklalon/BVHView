@@ -43,6 +43,7 @@ typedef struct GLBData
     int* invTopoOrder;
     GLBMaterialInfo* materialInfo;
     int materialInfoCount;
+    float meshGroundOffset;     // vertical offset to place mesh bottom on ground (mesh-only GLBs)
 } GLBData;
 
 void GLBDataInit(GLBData* data);

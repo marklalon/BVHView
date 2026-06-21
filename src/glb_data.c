@@ -50,6 +50,7 @@ void GLBDataInit(GLBData* data)
     data->invTopoOrder = NULL;
     data->materialInfo = NULL;
     data->materialInfoCount = 0;
+    data->meshGroundOffset = 0.0f;
 }
 
 void GLBDataFree(GLBData* data)
@@ -297,6 +298,8 @@ static void GLBDataUndoSkinnedMeshNodeTransforms(GLBData* data)
 Matrix GLBDataGetModelTransform(const GLBData* glb, float scale, bool inplace)
 {
     Matrix transform = MatrixScale(scale, scale, scale);
+    if (glb->model.skeleton.boneCount == 0 && glb->meshGroundOffset != 0.0f)
+        transform = MatrixMultiply(MatrixTranslate(0.0f, glb->meshGroundOffset * scale, 0.0f), transform);
     if (inplace && glb->model.currentPose != NULL && glb->topoOrder != NULL && glb->model.skeleton.boneCount > 0)
     {
         int rootBone = glb->topoOrder[0];
@@ -523,6 +526,27 @@ bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSi
         if (data->animations != NULL) { UnloadModelAnimations(data->animations, data->animCount); data->animations = NULL; }
         data->animCount = 0;
         printf("INFO: GLB '%s' has no skeleton - loading as mesh-only preview\n", filename);
+
+        // Compute world-space bounding box to align mesh bottom to ground
+        if (data->model.meshCount > 0)
+        {
+            float worldMinY = 1e+30f;
+            Matrix m = data->model.transform;
+            for (int meshIdx = 0; meshIdx < data->model.meshCount; meshIdx++)
+            {
+                Mesh* mesh = &data->model.meshes[meshIdx];
+                if (mesh->vertices == NULL) continue;
+                for (int v = 0; v < mesh->vertexCount; v++)
+                {
+                    Vector3 pos = { mesh->vertices[v * 3], mesh->vertices[v * 3 + 1], mesh->vertices[v * 3 + 2] };
+                    pos = Vector3Transform(pos, m);
+                    if (pos.y < worldMinY) worldMinY = pos.y;
+                }
+            }
+            data->meshGroundOffset = (worldMinY < 1e+29f) ? -worldMinY : 0.0f;
+            if (data->meshGroundOffset != 0.0f)
+                printf("INFO: Mesh ground offset %.3f (world min Y = %.3f)\n", data->meshGroundOffset, worldMinY);
+        }
     }
     else
     {

@@ -118,13 +118,13 @@ static void KeyRepeatReset(KeyRepeatState* state)
 void OrbitCameraInit(OrbitCamera* camera, int argc, char** argv)
 {
     memset(&camera->cam3d, 0, sizeof(Camera3D));
-    camera->cam3d.position = (Vector3){ 2.0f, 3.0f, 5.0f };
-    camera->cam3d.target = (Vector3){ -0.5f, 1.0f, 0.0f };
+    camera->cam3d.position = (Vector3){ 2.0f, 2.0f, 5.0f };
+    camera->cam3d.target = CAMERA_DEFAULT_TARGET;
     camera->cam3d.up = (Vector3){ 0.0f, 1.0f, 0.0f };
     camera->cam3d.fovy = ArgFloat(argc, argv, "cameraFOV", 45.0f);
     camera->cam3d.projection = CAMERA_PERSPECTIVE;
     camera->azimuth = ArgFloat(argc, argv, "cameraAzimuth", 0.0f);
-    camera->altitude = ArgFloat(argc, argv, "cameraAltitude", 0.4f);
+    camera->altitude = ArgFloat(argc, argv, "cameraAltitude", 0.4);
     camera->distance = ArgFloat(argc, argv, "cameraDistance", 4.0f);
     camera->offset = ArgVector3(argc, argv, "cameraOffset", Vector3Zero());
     camera->track = ArgBool(argc, argv, "cameraTrack", false);
@@ -722,7 +722,7 @@ void ApplicationUpdate(void* voidApplicationState)
     }
 
     // Update Camera
-    Vector3 cameraTarget = (Vector3){ 0.0f, 1.0f, 0.0f };
+    Vector3 cameraTarget = CAMERA_DEFAULT_TARGET;
     if (app->characterData.count > 0 && app->camera.track && app->camera.trackBone < app->characterData.xformData[app->characterData.active].jointCount)
         cameraTarget = app->characterData.xformData[app->characterData.active].globalPositions[app->camera.trackBone];
     if (!app->fileDialogState.windowActive)
@@ -901,6 +901,26 @@ void ApplicationUpdate(void* voidApplicationState)
                 bool needsDepthMaskHack = (meshOpacity < 1.0f && alphaMode != 2);
                 if (needsDepthMaskHack) { rlDrawRenderBatchActive(); rlDisableDepthMask(); }
                 DrawMesh(mesh, material, modelTransform);
+
+                // Wireframe overlay
+                if (app->renderSettings.drawWireframes)
+                {
+                    rlDrawRenderBatchActive();
+                    rlEnableWireMode();
+                    SetShaderValue(app->shader, app->uniforms.useTexture, &noTexture, SHADER_UNIFORM_INT);
+                    int opaqueAlpha = 0;
+                    SetShaderValue(app->shader, app->uniforms.alphaMode, &opaqueAlpha, SHADER_UNIFORM_INT);
+                    Vector3 wireColor = { meshColor.x * 0.25f, meshColor.y * 0.25f, meshColor.z * 0.25f };
+                    SetShaderValue(app->shader, app->uniforms.objectColor, &wireColor, SHADER_UNIFORM_VEC3);
+                    DrawMesh(mesh, material, modelTransform);
+                    rlDrawRenderBatchActive();
+                    rlDisableWireMode();
+                    // Restore per-mesh state (objectColor is per-character but kept in sync)
+                    SetShaderValue(app->shader, app->uniforms.objectColor, &meshColor, SHADER_UNIFORM_VEC3);
+                    SetShaderValue(app->shader, app->uniforms.useTexture, &hasTexture, SHADER_UNIFORM_INT);
+                    SetShaderValue(app->shader, app->uniforms.alphaMode, &alphaMode, SHADER_UNIFORM_INT);
+                }
+
                 if (needsDepthMaskHack) { rlDrawRenderBatchActive(); rlEnableDepthMask(); }
             }
         }

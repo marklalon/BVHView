@@ -3,6 +3,9 @@
 
 #include "raylib.h"
 
+// Default orbit target position (world origin)
+#define CAMERA_DEFAULT_TARGET ((Vector3){ 0.0f, 0.5f, 0.0f })
+
 typedef struct OrbitCamera {
     Camera3D cam3d;
     float azimuth;
