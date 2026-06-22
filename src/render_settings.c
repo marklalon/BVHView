@@ -32,7 +32,7 @@ void RenderSettingsInit(RenderSettings* settings, int argc, char** argv)
     settings->drawTransforms = ArgBool(argc, argv, "drawTransforms", false);
     settings->drawAO = ArgBool(argc, argv, "drawAO", true);
     settings->drawShadows = ArgBool(argc, argv, "drawShadows", true);
-    settings->drawEndSites = ArgBool(argc, argv, "drawEndSites", true);
+    settings->drawPBR = ArgBool(argc, argv, "drawPBR", false);
     settings->drawFPS = ArgBool(argc, argv, "drawFPS", false);
     settings->drawTexture = ArgBool(argc, argv, "drawTexture", true);
     settings->drawBindPose = ArgBool(argc, argv, "drawBindPose", false);

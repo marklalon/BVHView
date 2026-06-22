@@ -572,7 +572,7 @@ void GuiRenderSettings(RenderSettings* settings, CapsuleData* capsuleData, bool 
     GuiCheckBox((Rectangle){ screenWidth - 140, 360, 20, 20 }, "Draw Transforms", &settings->drawTransforms);
     GuiCheckBox((Rectangle){ screenWidth - 260, 390, 20, 20 }, "Draw AO", &settings->drawAO);
     GuiCheckBox((Rectangle){ screenWidth - 140, 390, 20, 20 }, "Draw Shadows", &settings->drawShadows);
-    GuiCheckBox((Rectangle){ screenWidth - 260, 420, 20, 20 }, "Draw End Sites", &settings->drawEndSites);
+    GuiCheckBox((Rectangle){ screenWidth - 260, 420, 20, 20 }, "Draw PBR", &settings->drawPBR);
     GuiCheckBox((Rectangle){ screenWidth - 140, 420, 20, 20 }, "Draw FPS", &settings->drawFPS);
     GuiCheckBox((Rectangle){ screenWidth - 260, 450, 20, 20 }, "Draw Texture", &settings->drawTexture);
     // Bind/rest pose only exists for GLB; BVH has no separately-stored bind pose, so disable it there

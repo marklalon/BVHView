@@ -755,10 +755,12 @@ void ApplicationUpdate(void* voidApplicationState)
 
     // Create Capsules
     CapsuleDataReset(&app->capsuleData);
+    // End sites are ignored for capsules (they produce degenerate zero-length capsules)
+    // and for skeleton lines (they are represented by the capsule geometry instead).
     for (int i = 0; i < app->characterData.count; i++)
     {
         if (!app->characterData.visible[i]) continue;
-        CapsuleDataAppendFromTransformData(&app->capsuleData, &app->characterData.xformData[i], app->characterData.radii[i], app->characterData.colors[i], app->characterData.opacities[i], !app->renderSettings.drawEndSites);
+        CapsuleDataAppendFromTransformData(&app->capsuleData, &app->characterData.xformData[i], app->characterData.radii[i], app->characterData.colors[i], app->characterData.opacities[i], true);
     }
 
     PROFILE_END(Update);
@@ -936,7 +938,7 @@ void ApplicationUpdate(void* voidApplicationState)
                 }
                 SetShaderValue(app->shader, app->uniforms.useTexture, &hasTexture, SHADER_UNIFORM_INT);
 
-                int materialUsePBR = (info != NULL && info->hasPBR) ? 1 : 0;
+                int materialUsePBR = (app->renderSettings.drawPBR && info != NULL && info->hasPBR) ? 1 : 0;
                 float metallic = materialUsePBR ? info->metallicFactor : 0.0f;
                 float roughness = materialUsePBR ? info->roughnessFactor : 1.0f;
                 float materialNormalScale = materialUsePBR ? info->normalScale : 1.0f;
@@ -1105,7 +1107,8 @@ void ApplicationUpdate(void* voidApplicationState)
         for (int i = 0; i < app->characterData.count; i++)
         {
             if (!app->characterData.visible[i]) continue;
-            DrawSkeleton(&app->characterData.xformData[i], app->renderSettings.drawEndSites, DARKGRAY, GRAY, (i == app->characterData.active) ? app->camera.selectedBone : -1);
+            // End sites skipped here — represented by capsule geometry instead
+            DrawSkeleton(&app->characterData.xformData[i], false, DARKGRAY, GRAY, (i == app->characterData.active) ? app->camera.selectedBone : -1);
         }
     }
     if (app->renderSettings.drawTransforms)
