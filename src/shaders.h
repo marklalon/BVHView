@@ -52,7 +52,6 @@ typedef struct ShaderUniforms
     int usePBR;
     int useMetalnessTexture;
     int useNormalTexture;
-    int useRoughnessTexture;
     int useOcclusionTexture;
     int useEmissionTexture;
     int metallicFactor;

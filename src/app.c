@@ -918,7 +918,6 @@ void ApplicationUpdate(void* voidApplicationState)
                 int hasTexture = 0;
                 int hasMetalness = 0;
                 int hasNormal = 0;
-                int hasRoughness = 0;
                 int hasOcclusion = 0;
                 int hasEmission = 0;
                 if (app->renderSettings.drawTexture)
@@ -930,8 +929,6 @@ void ApplicationUpdate(void* voidApplicationState)
                     hasMetalness = tex.id > 0 && tex.id != defaultTexId;
                     tex = material.maps[MATERIAL_MAP_NORMAL].texture;
                     hasNormal = tex.id > 0 && tex.id != defaultTexId;
-                    tex = material.maps[MATERIAL_MAP_ROUGHNESS].texture;
-                    hasRoughness = tex.id > 0 && tex.id != defaultTexId;
                     tex = material.maps[MATERIAL_MAP_OCCLUSION].texture;
                     hasOcclusion = tex.id > 0 && tex.id != defaultTexId;
                     tex = material.maps[MATERIAL_MAP_EMISSION].texture;
@@ -967,7 +964,6 @@ void ApplicationUpdate(void* voidApplicationState)
                 SetShaderValue(app->shader, app->uniforms.usePBR, &materialUsePBR, SHADER_UNIFORM_INT);
                 SetShaderValue(app->shader, app->uniforms.useMetalnessTexture, &hasMetalness, SHADER_UNIFORM_INT);
                 SetShaderValue(app->shader, app->uniforms.useNormalTexture, &hasNormal, SHADER_UNIFORM_INT);
-                SetShaderValue(app->shader, app->uniforms.useRoughnessTexture, &hasRoughness, SHADER_UNIFORM_INT);
                 SetShaderValue(app->shader, app->uniforms.useOcclusionTexture, &hasOcclusion, SHADER_UNIFORM_INT);
                 SetShaderValue(app->shader, app->uniforms.useEmissionTexture, &hasEmission, SHADER_UNIFORM_INT);
                 SetShaderValue(app->shader, app->uniforms.metallicFactor, &metallic, SHADER_UNIFORM_FLOAT);

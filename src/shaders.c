@@ -113,7 +113,6 @@ uniform float objectOpacity;
 uniform sampler2D texture0;
 uniform sampler2D texture1;
 uniform sampler2D texture2;
-uniform sampler2D texture3;
 uniform sampler2D texture4;
 uniform sampler2D texture5;
 uniform int useTexture;
@@ -121,7 +120,6 @@ uniform int useTexture;
 uniform int usePBR;
 uniform int useMetalnessTexture;
 uniform int useNormalTexture;
-uniform int useRoughnessTexture;
 uniform int useOcclusionTexture;
 uniform int useEmissionTexture;
 uniform float metallicFactor;
@@ -177,9 +175,9 @@ uniform float exposure;
 // PBR lighting adjustment coefficients
 const float PBR_EXPOSURE_ADJUSTMENT = 1.875;
 const float PBR_SUN_ADJUSTMENT = 4.0;
-const float PBR_SKY_ADJUSTMENT = 8.0;
-const float PBR_AMBIENT_ADJUSTMENT = 0.0;
-const float PBR_GROUND_ADJUSTMENT = 10.0;
+const float PBR_SKY_ADJUSTMENT = 6.0;
+const float PBR_AMBIENT_ADJUSTMENT = 0.02;
+const float PBR_GROUND_ADJUSTMENT = 6.0;
 
 out vec4 finalColor;
 
@@ -524,8 +522,11 @@ void main()
         vec2 mrUVs = MaterialUV(metallicRoughnessUV);
         float metallic = metallicFactor;
         float roughness = roughnessFactor;
-        if (useMetalnessTexture == 1) metallic *= texture(texture1, mrUVs).r;
-        if (useRoughnessTexture == 1) roughness *= texture(texture3, mrUVs).r;
+        if (useMetalnessTexture == 1) {
+            vec4 mrSample = texture(texture1, mrUVs);
+            roughness *= mrSample.g;
+            metallic *= mrSample.b;
+        }
         metallic = Saturate(metallic);
         roughness = clamp(roughness, 0.045, 1.0);
 
@@ -559,9 +560,11 @@ void main()
         vec3 lightSkyColor = SRGBToLinear(skyColor);
         float skyDiffuse = max(nor.y, 0.0);
         float groundDiffuse = max(-nor.y, 0.0);
-        vec3 diffuseLighting = useEnvironmentMap == 1
-            ? (ambientStrength * PBR_AMBIENT_ADJUSTMENT) * EnvironmentDiffuseIrradiance(nor)
-            : (ambientStrength * PBR_AMBIENT_ADJUSTMENT) * lightSkyColor;
+        vec3 diffuseLighting = vec3(0.0);
+        if (useEnvironmentMap == 1)
+            diffuseLighting = ambientStrength * PBR_AMBIENT_ADJUSTMENT * EnvironmentDiffuseIrradiance(nor);
+        else
+            diffuseLighting = (ambientStrength * PBR_AMBIENT_ADJUSTMENT) * lightSkyColor;
         diffuseLighting += lightSkyColor *
             (skyStrength * PBR_SKY_ADJUSTMENT * skyDiffuse + groundStrength * PBR_GROUND_ADJUSTMENT * groundDiffuse);
         vec3 indirectDiffuse = albedo * (1.0 - metallic) * diffuseLighting;
@@ -571,9 +574,11 @@ void main()
         // sky/ground approximation remains as a fallback and optional fill.
         float filteredReflectionY = mix(reflectionDir.y, nor.y, roughness * roughness);
         float reflectionSky = Saturate(filteredReflectionY * 0.5 + 0.5);
-        vec3 reflectionColor = useEnvironmentMap == 1
-            ? (ambientStrength * PBR_AMBIENT_ADJUSTMENT) * EnvironmentRadiance(reflectionDir, roughness)
-            : (ambientStrength * PBR_AMBIENT_ADJUSTMENT) * lightSkyColor * mix(0.35, 1.0, reflectionSky);
+        vec3 reflectionColor = vec3(0.0);
+        if (useEnvironmentMap == 1)
+            reflectionColor = ambientStrength * PBR_AMBIENT_ADJUSTMENT * EnvironmentRadiance(reflectionDir, roughness);
+        else
+            reflectionColor = (ambientStrength * PBR_AMBIENT_ADJUSTMENT) * lightSkyColor * mix(0.35, 1.0, reflectionSky);
         reflectionColor += lightSkyColor * mix(0.35, 1.0, reflectionSky) *
             mix(groundStrength * PBR_GROUND_ADJUSTMENT, skyStrength * PBR_SKY_ADJUSTMENT, reflectionSky);
         vec3 indirectSpecular = EnvironmentBRDF(f0, nDotV, roughness) *
@@ -683,7 +688,6 @@ void ShaderUniformsInit(ShaderUniforms* uniforms, Shader shader)
     uniforms->usePBR = GetShaderLocation(shader, "usePBR");
     uniforms->useMetalnessTexture = GetShaderLocation(shader, "useMetalnessTexture");
     uniforms->useNormalTexture = GetShaderLocation(shader, "useNormalTexture");
-    uniforms->useRoughnessTexture = GetShaderLocation(shader, "useRoughnessTexture");
     uniforms->useOcclusionTexture = GetShaderLocation(shader, "useOcclusionTexture");
     uniforms->useEmissionTexture = GetShaderLocation(shader, "useEmissionTexture");
     uniforms->metallicFactor = GetShaderLocation(shader, "metallicFactor");
@@ -703,7 +707,6 @@ void ShaderUniformsInit(ShaderUniforms* uniforms, Shader shader)
     // DrawMesh() binds material maps through this location table.
     shader.locs[SHADER_LOC_MAP_METALNESS] = GetShaderLocation(shader, "texture1");
     shader.locs[SHADER_LOC_MAP_NORMAL] = GetShaderLocation(shader, "texture2");
-    shader.locs[SHADER_LOC_MAP_ROUGHNESS] = GetShaderLocation(shader, "texture3");
     shader.locs[SHADER_LOC_MAP_OCCLUSION] = GetShaderLocation(shader, "texture4");
     shader.locs[SHADER_LOC_MAP_EMISSION] = GetShaderLocation(shader, "texture5");
 
