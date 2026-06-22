@@ -21,7 +21,7 @@ typedef struct CapsuleData CapsuleData;
 
 void GuiCustomGroupBox(Rectangle bounds, const char* text);
 void GuiInitDarkMode(void);
-void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterData, int argc, char** argv);
+void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterData, RenderSettings* settings, CapsuleData* capsuleData, int argc, char** argv);
 int GetJointDepth(int jointIndex, const int* parents);
 void GuiSkeletonPanel(OrbitCamera* camera, CharacterData* characterData, int screenWidth, int screenHeight);
 void GuiRenderSettings(RenderSettings* settings, CapsuleData* capsuleData, bool bindPoseAvailable, int screenWidth, int screenHeight);

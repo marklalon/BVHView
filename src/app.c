@@ -831,6 +831,33 @@ void ApplicationUpdate(void* voidApplicationState)
         SetShaderValue(app->shader, app->uniforms.isCapsule, &groundIsCapsule, SHADER_UNIFORM_INT);
         SetShaderValue(app->shader, app->uniforms.useTexture, &groundUseTexture, SHADER_UNIFORM_INT);
         SetShaderValue(app->shader, app->uniforms.objectColor, &groundColor, SHADER_UNIFORM_VEC3);
+        // Freeze lighting to defaults for checker floor — panel controls do not apply
+        float savedSunStrength = app->renderSettings.sunLightStrength;
+        float savedSkyStrength = app->renderSettings.skyLightStrength;
+        float savedGroundStrength = app->renderSettings.groundLightStrength;
+        float savedAmbientStrength = app->renderSettings.ambientLightStrength;
+        Vector3 savedSunColor = sunColorValue;
+        Vector3 savedSkyColor = skyColorValue;
+        Vector3 savedSunDir = sunLightDir;
+        float savedExposure = app->renderSettings.exposure;
+        Vector3 defaultSunColor = { 253.0f/255.0f, 255.0f/255.0f, 232.0f/255.0f };
+        Vector3 defaultSkyColor = { 174.0f/255.0f, 183.0f/255.0f, 190.0f/255.0f };
+        float defaultSunStrength = 0.25f;
+        float defaultSkyStrength = 0.15f;
+        float defaultGroundStrength = 0.1f;
+        float defaultAmbientStrength = 1.0f;
+        float defaultExposure = 0.9f;
+        Vector3 defaultSunLightPos = Vector3RotateByQuaternion((Vector3){ 0.0f, 0.0f, 1.0f }, QuaternionFromAxisAngle((Vector3){ 0.0f, 1.0f, 0.0f }, PI / 4.0f));
+        Vector3 defaultSunLightAxis = Vector3Normalize(Vector3CrossProduct(defaultSunLightPos, (Vector3){ 0.0f, 1.0f, 0.0f }));
+        Vector3 groundSunDir = Vector3Negate(Vector3RotateByQuaternion(defaultSunLightPos, QuaternionFromAxisAngle(defaultSunLightAxis, 0.8f)));
+        SetShaderValue(app->shader, app->uniforms.sunStrength, &defaultSunStrength, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(app->shader, app->uniforms.sunColor, &defaultSunColor, SHADER_UNIFORM_VEC3);
+        SetShaderValue(app->shader, app->uniforms.skyStrength, &defaultSkyStrength, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(app->shader, app->uniforms.skyColor, &defaultSkyColor, SHADER_UNIFORM_VEC3);
+        SetShaderValue(app->shader, app->uniforms.ambientStrength, &defaultAmbientStrength, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(app->shader, app->uniforms.groundStrength, &defaultGroundStrength, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(app->shader, app->uniforms.sunDir, &groundSunDir, SHADER_UNIFORM_VEC3);
+        SetShaderValue(app->shader, app->uniforms.exposure, &defaultExposure, SHADER_UNIFORM_FLOAT);
         for (int i = 0; i < 11; i++)
         {
             for (int j = 0; j < 11; j++)
@@ -851,7 +878,7 @@ void ApplicationUpdate(void* voidApplicationState)
                 PROFILE_BEGIN(RenderingGroundSegmentShadow);
                 app->capsuleData.shadowCapsuleCount = 0;
                 if (app->renderSettings.drawCapsules && app->renderSettings.drawShadows)
-                    CapsuleDataUpdateShadowCapsulesForGroundSegment(&app->capsuleData, groundSegmentPosition, sunLightDir, app->renderSettings.sunLightConeAngle);
+                    CapsuleDataUpdateShadowCapsulesForGroundSegment(&app->capsuleData, groundSegmentPosition, groundSunDir, app->renderSettings.sunLightConeAngle);
                 int shadowCapsuleCount = MinInt(app->capsuleData.shadowCapsuleCount, SHADOW_CAPSULES_MAX);
                 PROFILE_END(RenderingGroundSegmentShadow);
                 SetShaderValue(app->shader, app->uniforms.shadowCapsuleCount, &shadowCapsuleCount, SHADER_UNIFORM_INT);
@@ -862,6 +889,14 @@ void ApplicationUpdate(void* voidApplicationState)
                 PROFILE_END(RenderingGroundSegment);
             }
         }
+        SetShaderValue(app->shader, app->uniforms.sunStrength, &savedSunStrength, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(app->shader, app->uniforms.sunColor, &savedSunColor, SHADER_UNIFORM_VEC3);
+        SetShaderValue(app->shader, app->uniforms.skyStrength, &savedSkyStrength, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(app->shader, app->uniforms.skyColor, &savedSkyColor, SHADER_UNIFORM_VEC3);
+        SetShaderValue(app->shader, app->uniforms.ambientStrength, &savedAmbientStrength, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(app->shader, app->uniforms.groundStrength, &savedGroundStrength, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(app->shader, app->uniforms.sunDir, &savedSunDir, SHADER_UNIFORM_VEC3);
+        SetShaderValue(app->shader, app->uniforms.exposure, &savedExposure, SHADER_UNIFORM_FLOAT);
     }
     PROFILE_END(RenderingGround);
 
@@ -1136,7 +1171,7 @@ void ApplicationUpdate(void* voidApplicationState)
             DrawText("Drag and Drop .bvh / .glb / .gltf files to open them.", app->screenWidth / 2 - 370, app->screenHeight / 2 - 15, 30, DARKGRAY);
         GuiRenderSettings(&app->renderSettings, &app->capsuleData, bindPoseAvailable, app->screenWidth, app->screenHeight);
         if (app->renderSettings.drawFPS) DrawFPS(230, 10);
-        GuiOrbitCamera(&app->camera, &app->characterData, app->argc, app->argv);
+        GuiOrbitCamera(&app->camera, &app->characterData, &app->renderSettings, &app->capsuleData, app->argc, app->argv);
         if (app->camera.showSkeletonPanel) GuiSkeletonPanel(&app->camera, &app->characterData, app->screenWidth, app->screenHeight);
         GuiCharacterData(&app->characterData, &app->fileDialogState, &app->scrubberSettings, app->errMsg, app->argc, app->argv);
         if (app->characterData.colorPickerActive)

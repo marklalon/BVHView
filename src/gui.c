@@ -231,7 +231,7 @@ void GuiCustomGroupBox(Rectangle bounds, const char* text)
     }
 }
 
-void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterData, int argc, char** argv)
+void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterData, RenderSettings* settings, CapsuleData* capsuleData, int argc, char** argv)
 {
     GuiCustomGroupBox((Rectangle){ 20, 10, 190, 280 }, "Info");
 
@@ -377,6 +377,31 @@ void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterData, int argc,
         camera->offset = ArgVector3(argc, argv, "cameraOffset", Vector3Zero());
         camera->track = ArgBool(argc, argv, "cameraTrack", false);
         camera->trackBone = ArgInt(argc, argv, "cameraTrackBone", 0);
+
+        // Reset lighting/render panel to defaults
+        settings->exposure = ArgFloat(argc, argv, "exposure", 0.9f);
+        settings->sunLightStrength = ArgFloat(argc, argv, "sunLightStrength", 0.25f);
+        settings->sunLightConeAngle = ArgFloat(argc, argv, "sunLightConeAngle", 0.2f);
+        CapsuleDataUpdateShadowLookupTable(capsuleData, settings->sunLightConeAngle);
+        settings->skyLightStrength = ArgFloat(argc, argv, "skyLightStrength", 0.15f);
+        settings->ambientLightStrength = ArgFloat(argc, argv, "ambientLightStrength", 1.0f);
+        settings->groundLightStrength = ArgFloat(argc, argv, "groundLightStrength", 0.1f);
+        settings->sunAzimuth = ArgFloat(argc, argv, "sunAzimuth", PI / 4.0f);
+        settings->sunAltitude = ArgFloat(argc, argv, "sunAltitude", 0.8f);
+        settings->drawOrigin = ArgBool(argc, argv, "drawOrigin", true);
+        settings->drawGrid = ArgBool(argc, argv, "drawGrid", false);
+        settings->drawChecker = ArgBool(argc, argv, "drawChecker", true);
+        settings->drawMeshes = ArgBool(argc, argv, "drawMeshes", false);
+        settings->drawCapsules = ArgBool(argc, argv, "drawCapsules", true);
+        settings->drawWireframes = ArgBool(argc, argv, "drawWireframes", false);
+        settings->drawSkeleton = ArgBool(argc, argv, "drawSkeleton", true);
+        settings->drawTransforms = ArgBool(argc, argv, "drawTransforms", false);
+        settings->drawAO = ArgBool(argc, argv, "drawAO", true);
+        settings->drawShadows = ArgBool(argc, argv, "drawShadows", true);
+        settings->drawPBR = ArgBool(argc, argv, "drawPBR", false);
+        settings->drawFPS = ArgBool(argc, argv, "drawFPS", false);
+        settings->drawTexture = ArgBool(argc, argv, "drawTexture", true);
+        settings->drawBindPose = ArgBool(argc, argv, "drawBindPose", false);
     }
 
     // Skeleton/animation controls are meaningless for mesh-only GLBs (no joints),
