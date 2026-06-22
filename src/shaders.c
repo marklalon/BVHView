@@ -171,6 +171,7 @@ uniform vec3 skyColor;
 uniform float ambientStrength;
 uniform float groundStrength;
 uniform float exposure;
+uniform int enableLighting;
 
 // PBR lighting adjustment coefficients
 const float PBR_EXPOSURE_ADJUSTMENT = 1.875;
@@ -584,7 +585,10 @@ void main()
         vec3 indirectSpecular = EnvironmentBRDF(f0, nDotV, roughness) *
             reflectionColor;
 
-        final = direct + ambShadow * materialAO * (indirectDiffuse + indirectSpecular) + emission;
+        if (enableLighting == 0)
+            final = albedo;
+        else
+            final = direct + ambShadow * materialAO * (indirectDiffuse + indirectSpecular) + emission;
     }
     else
     {
@@ -613,7 +617,10 @@ void main()
             groundStrength * lightSkyColor * albedo * groundFactorDiff +
             skyStrength * lightSkyColor * albedo * skyFactorDiff;
         float specular = sunShadow * sunStrength * sunFactorSpec + skyStrength * skyFactorSpec;
-        final = diffuse + ambient + specular;
+        if (enableLighting == 0)
+            final = albedo;
+        else
+            final = diffuse + ambient + specular;
     }
 
     // Screen-door transparency using 8x8 Bayer dither matrix
@@ -641,7 +648,15 @@ void main()
         if (texAlpha <= bayer8[pixel.y * 8 + pixel.x]) discard;
     }
 
-    if (usePBR == 1)
+    if (enableLighting == 0)
+    {
+        vec3 raw = max(final, vec3(0.0));
+        if (usePBR == 1)
+            finalColor = vec4(LinearToSRGB(raw), objectOpacity);
+        else
+            finalColor = vec4(LegacyToGamma(raw), objectOpacity);
+    }
+    else if (usePBR == 1)
     {
         vec3 displayLinear = AgXToneMapping(max((exposure * PBR_EXPOSURE_ADJUSTMENT) * final, vec3(0.0)));
         finalColor = vec4(LinearToSRGB(displayLinear), objectOpacity);
@@ -719,4 +734,5 @@ void ShaderUniformsInit(ShaderUniforms* uniforms, Shader shader)
     uniforms->groundStrength = GetShaderLocation(shader, "groundStrength");
 
     uniforms->exposure = GetShaderLocation(shader, "exposure");
+    uniforms->enableLighting = GetShaderLocation(shader, "enableLighting");
 }

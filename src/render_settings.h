@@ -33,7 +33,7 @@ typedef struct RenderSettings {
     bool drawSkeleton;
     bool drawTransforms;
     bool drawAO;
-    bool drawShadows;
+    bool enableLighting;
     bool drawPBR;
     bool drawFPS;
     bool drawTexture;

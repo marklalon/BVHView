@@ -77,6 +77,7 @@ typedef struct ShaderUniforms
     int groundStrength;
 
     int exposure;
+    int enableLighting;
 
 } ShaderUniforms;
 

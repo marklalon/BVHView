@@ -784,6 +784,8 @@ void ApplicationUpdate(void* voidApplicationState)
     Vector3 sunLightDir = Vector3Negate(Vector3RotateByQuaternion(sunLightPosition, QuaternionFromAxisAngle(sunLightAxis, app->renderSettings.sunAltitude)));
     SetShaderValue(app->shader, app->uniforms.cameraPosition, &app->camera.cam3d.position, SHADER_UNIFORM_VEC3);
     SetShaderValue(app->shader, app->uniforms.exposure, &app->renderSettings.exposure, SHADER_UNIFORM_FLOAT);
+    int enableLighting = app->renderSettings.enableLighting;
+    SetShaderValue(app->shader, app->uniforms.enableLighting, &enableLighting, SHADER_UNIFORM_INT);
     SetShaderValue(app->shader, app->uniforms.sunDir, &sunLightDir, SHADER_UNIFORM_VEC3);
     SetShaderValue(app->shader, app->uniforms.sunStrength, &app->renderSettings.sunLightStrength, SHADER_UNIFORM_FLOAT);
     SetShaderValue(app->shader, app->uniforms.sunColor, &sunColorValue, SHADER_UNIFORM_VEC3);
@@ -840,6 +842,9 @@ void ApplicationUpdate(void* voidApplicationState)
         Vector3 savedSkyColor = skyColorValue;
         Vector3 savedSunDir = sunLightDir;
         float savedExposure = app->renderSettings.exposure;
+        int savedEnableLighting = enableLighting;
+        int defaultEnableLighting = 1;
+        SetShaderValue(app->shader, app->uniforms.enableLighting, &defaultEnableLighting, SHADER_UNIFORM_INT);
         Vector3 defaultSunColor = { 253.0f/255.0f, 255.0f/255.0f, 232.0f/255.0f };
         Vector3 defaultSkyColor = { 174.0f/255.0f, 183.0f/255.0f, 190.0f/255.0f };
         float defaultSunStrength = 0.25f;
@@ -877,7 +882,7 @@ void ApplicationUpdate(void* voidApplicationState)
                 SetShaderValueV(app->shader, app->uniforms.aoCapsuleRadii, app->capsuleData.aoCapsuleRadii, SHADER_UNIFORM_FLOAT, aoCapsuleCount);
                 PROFILE_BEGIN(RenderingGroundSegmentShadow);
                 app->capsuleData.shadowCapsuleCount = 0;
-                if (app->renderSettings.drawCapsules && app->renderSettings.drawShadows)
+                if (app->renderSettings.drawCapsules)
                     CapsuleDataUpdateShadowCapsulesForGroundSegment(&app->capsuleData, groundSegmentPosition, groundSunDir, app->renderSettings.sunLightConeAngle);
                 int shadowCapsuleCount = MinInt(app->capsuleData.shadowCapsuleCount, SHADOW_CAPSULES_MAX);
                 PROFILE_END(RenderingGroundSegmentShadow);
@@ -897,6 +902,7 @@ void ApplicationUpdate(void* voidApplicationState)
         SetShaderValue(app->shader, app->uniforms.groundStrength, &savedGroundStrength, SHADER_UNIFORM_FLOAT);
         SetShaderValue(app->shader, app->uniforms.sunDir, &savedSunDir, SHADER_UNIFORM_VEC3);
         SetShaderValue(app->shader, app->uniforms.exposure, &savedExposure, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(app->shader, app->uniforms.enableLighting, &savedEnableLighting, SHADER_UNIFORM_INT);
     }
     PROFILE_END(RenderingGround);
 
@@ -1105,7 +1111,7 @@ void ApplicationUpdate(void* voidApplicationState)
             SetShaderValueV(app->shader, app->uniforms.aoCapsuleRadii, app->capsuleData.aoCapsuleRadii, SHADER_UNIFORM_FLOAT, aoCapsuleCount);
             PROFILE_BEGIN(RenderingCapsulesCapsuleShadow);
             app->capsuleData.shadowCapsuleCount = 0;
-            if (app->renderSettings.drawShadows) CapsuleDataUpdateShadowCapsulesForCapsule(&app->capsuleData, j, sunLightDir, app->renderSettings.sunLightConeAngle);
+            CapsuleDataUpdateShadowCapsulesForCapsule(&app->capsuleData, j, sunLightDir, app->renderSettings.sunLightConeAngle);
             int shadowCapsuleCount = MinInt(app->capsuleData.shadowCapsuleCount, SHADOW_CAPSULES_MAX);
             PROFILE_END(RenderingCapsulesCapsuleShadow);
             SetShaderValue(app->shader, app->uniforms.shadowCapsuleCount, &shadowCapsuleCount, SHADER_UNIFORM_INT);
