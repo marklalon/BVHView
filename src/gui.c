@@ -388,20 +388,6 @@ void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterData, RenderSet
         settings->groundLightStrength = ArgFloat(argc, argv, "groundLightStrength", 0.1f);
         settings->sunAzimuth = ArgFloat(argc, argv, "sunAzimuth", PI / 4.0f);
         settings->sunAltitude = ArgFloat(argc, argv, "sunAltitude", 0.8f);
-        settings->drawOrigin = ArgBool(argc, argv, "drawOrigin", true);
-        settings->drawGrid = ArgBool(argc, argv, "drawGrid", false);
-        settings->drawChecker = ArgBool(argc, argv, "drawChecker", true);
-        settings->drawMeshes = ArgBool(argc, argv, "drawMeshes", false);
-        settings->drawCapsules = ArgBool(argc, argv, "drawCapsules", true);
-        settings->drawWireframes = ArgBool(argc, argv, "drawWireframes", false);
-        settings->drawSkeleton = ArgBool(argc, argv, "drawSkeleton", true);
-        settings->drawTransforms = ArgBool(argc, argv, "drawTransforms", false);
-        settings->drawAO = ArgBool(argc, argv, "drawAO", true);
-        settings->drawShadows = ArgBool(argc, argv, "drawShadows", true);
-        settings->drawPBR = ArgBool(argc, argv, "drawPBR", false);
-        settings->drawFPS = ArgBool(argc, argv, "drawFPS", false);
-        settings->drawTexture = ArgBool(argc, argv, "drawTexture", true);
-        settings->drawBindPose = ArgBool(argc, argv, "drawBindPose", false);
     }
 
     // Skeleton/animation controls are meaningless for mesh-only GLBs (no joints),
