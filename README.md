@@ -14,6 +14,12 @@ https://github.com/orangeduck/BVHView/assets/177299/9f976284-02c1-4a14-bca4-b8b3
 
 # Building
 
+WebP texture decoding uses [libwebp 1.6.0](https://github.com/webmproject/libwebp). On Windows, `build.bat` downloads it into `build/libwebp` automatically. When invoking `make` directly on any platform, clone that release first (or pass its location as `WEBP_DIR`):
+
+```sh
+git clone --depth 1 --branch v1.6.0 https://github.com/webmproject/libwebp.git build/libwebp
+```
+
 ## Windows
 
 Download and install [MinGW](https://www.mingw-w64.org/) in some form. Perhaps [w64devkit](https://www.mingw-w64.org/downloads/#w64devkit) or [MSYS2](https://www.mingw-w64.org/downloads/#msys2).

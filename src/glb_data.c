@@ -9,8 +9,10 @@
 #include <string.h>
 #include <math.h>
 #include <float.h>
+#include <limits.h>
 #include "raylib.h"
 #include "build/raylib/raylib/src/external/cgltf.h"
+#include "src/webp/decode.h"
 
 // Private stb_image with full JPEG/PNG/BMP/GIF/PSD/HDR support.
 #if defined(__GNUC__)
@@ -29,6 +31,40 @@
 #include "glb_data.h"
 #include "transform_data.h"
 #include "math_utils.h"
+
+static bool GLBDataIsWebP(const cgltf_image* image, const unsigned char* bytes, int size)
+{
+    if (image != NULL && image->mime_type != NULL && strcmp(image->mime_type, "image/webp") == 0) return true;
+    if (size >= 12 && memcmp(bytes, "RIFF", 4) == 0 && memcmp(bytes + 8, "WEBP", 4) == 0) return true;
+    return false;
+}
+
+static unsigned char* GLBDataLoadImageURI(const char* modelFilename, const char* uri, int* size)
+{
+    *size = 0;
+    if (uri == NULL || uri[0] == '\0') return NULL;
+    if (strncmp(uri, "data:", 5) == 0)
+    {
+        const char* comma = strchr(uri, ',');
+        if (comma == NULL || strstr(uri, ";base64") == NULL) return NULL;
+        return DecodeDataBase64(comma + 1, size);
+    }
+
+    const char* slash = strrchr(modelFilename, '/');
+    const char* backslash = strrchr(modelFilename, '\\');
+    if (backslash != NULL && (slash == NULL || backslash > slash)) slash = backslash;
+    bool absolute = (uri[0] == '/' || uri[0] == '\\' || (uri[0] != '\0' && uri[1] == ':'));
+    size_t directoryLength = (!absolute && slash != NULL) ? (size_t)(slash - modelFilename + 1) : 0;
+    size_t pathLength = directoryLength + strlen(uri);
+    char* path = (char*)malloc(pathLength + 1);
+    if (path == NULL) return NULL;
+    if (directoryLength > 0) memcpy(path, modelFilename, directoryLength);
+    memcpy(path + directoryLength, uri, strlen(uri) + 1);
+    cgltf_decode_uri(path);
+    unsigned char* bytes = LoadFileData(path, size);
+    free(path);
+    return bytes;
+}
 
 void GLBDataInit(GLBData* data)
 {
@@ -611,28 +647,52 @@ bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSi
         {
             Texture2D tex = data->model.materials[matIdx].maps[MATERIAL_MAP_ALBEDO].texture;
             bool alreadyLoaded = (tex.id > 0 && tex.id != defaultTexId && (tex.width > 1 || tex.height > 1));
-            if (alreadyLoaded) continue;
             if (data->sourceData == NULL) continue;
             int cgltfIdx = matIdx - 1;
             if (cgltfIdx < 0 || cgltfIdx >= (int)data->sourceData->materials_count) continue;
             cgltf_material* cgltfMat = &data->sourceData->materials[cgltfIdx];
             if (!cgltfMat->has_pbr_metallic_roughness) continue;
             cgltf_texture* cgltfTex = cgltfMat->pbr_metallic_roughness.base_color_texture.texture;
-            if (cgltfTex == NULL || cgltfTex->image == NULL) continue;
-            cgltf_image* cgltfImg = cgltfTex->image;
-            if (cgltfImg->buffer_view == NULL || cgltfImg->buffer_view->buffer->data == NULL) continue;
-            cgltf_buffer_view* bv = cgltfImg->buffer_view;
-            int imgSize = (int)bv->size;
-            if (imgSize <= 0) continue;
-            unsigned char* imgData = (unsigned char*)malloc(imgSize);
-            if (imgData == NULL) continue;
-            int offset = (int)bv->offset;
-            int stride = (int)(bv->stride ? bv->stride : 1);
-            unsigned char* src = (unsigned char*)bv->buffer->data;
-            for (int k = 0; k < imgSize; k++) { imgData[k] = src[offset]; offset += stride; }
-            int w, h, comp;
-            unsigned char* pixels = stbi_load_from_memory(imgData, imgSize, &w, &h, &comp, 4);
-            free(imgData);
+            if (cgltfTex == NULL) continue;
+
+            // EXT_texture_webp stores its source separately from the standard
+            // fallback image. Prefer it when present; required-only WebP files
+            // have no cgltfTex->image at all.
+            bool hasWebPSource = (cgltfTex->has_webp && cgltfTex->webp_image != NULL);
+            cgltf_image* cgltfImg = hasWebPSource ? cgltfTex->webp_image : cgltfTex->image;
+            if (cgltfImg == NULL || (alreadyLoaded && !hasWebPSource)) continue;
+
+            const unsigned char* imgData = NULL;
+            unsigned char* ownedImgData = NULL;
+            int imgSize = 0;
+            if (cgltfImg->buffer_view != NULL && cgltfImg->buffer_view->size <= INT_MAX)
+            {
+                cgltf_buffer_view* bv = cgltfImg->buffer_view;
+                imgSize = (int)bv->size;
+                if (bv->data != NULL) imgData = (const unsigned char*)bv->data;
+                else if (bv->buffer != NULL && bv->buffer->data != NULL &&
+                         bv->offset <= bv->buffer->size && bv->size <= bv->buffer->size - bv->offset)
+                {
+                    imgData = (const unsigned char*)bv->buffer->data + bv->offset;
+                }
+            }
+            else if (cgltfImg->uri != NULL)
+            {
+                ownedImgData = GLBDataLoadImageURI(filename, cgltfImg->uri, &imgSize);
+                imgData = ownedImgData;
+            }
+            if (imgData == NULL || imgSize <= 0)
+            {
+                if (ownedImgData != NULL) MemFree(ownedImgData);
+                continue;
+            }
+
+            int w = 0, h = 0, comp = 0;
+            bool isWebP = GLBDataIsWebP(cgltfImg, imgData, imgSize);
+            unsigned char* pixels = isWebP
+                ? WebPDecodeRGBA(imgData, (size_t)imgSize, &w, &h)
+                : stbi_load_from_memory(imgData, imgSize, &w, &h, &comp, 4);
+            if (ownedImgData != NULL) MemFree(ownedImgData);
             if (pixels != NULL)
             {
                 Image img = { 0 };
@@ -640,9 +700,15 @@ bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSi
                 Texture2D newTex = LoadTextureFromImage(img);
                 GenTextureMipmaps(&newTex);
                 SetTextureFilter(newTex, TEXTURE_FILTER_TRILINEAR);
-                stbi_image_free(pixels);
+                if (isWebP) WebPFree(pixels);
+                else stbi_image_free(pixels);
+                if (alreadyLoaded) UnloadTexture(tex);
                 data->model.materials[matIdx].maps[MATERIAL_MAP_ALBEDO].texture = newTex;
-                printf("INFO: Reloaded GLB texture (material %d) via stb_image: %dx%d\n", matIdx, w, h);
+                printf("INFO: Reloaded GLB texture (material %d) via %s: %dx%d\n", matIdx, isWebP ? "libwebp" : "stb_image", w, h);
+            }
+            else if (isWebP)
+            {
+                printf("WARN: Failed to decode WebP texture for material %d\n", matIdx);
             }
         }
     }
