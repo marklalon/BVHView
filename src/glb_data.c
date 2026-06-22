@@ -66,6 +66,111 @@ static unsigned char* GLBDataLoadImageURI(const char* modelFilename, const char*
     return bytes;
 }
 
+static unsigned char* GLBDataDecodeImageRGBA(const char* modelFilename, const cgltf_image* image,
+    int* width, int* height, bool* webpPixels)
+{
+    if (image == NULL) return NULL;
+    const unsigned char* bytes = NULL;
+    unsigned char* ownedBytes = NULL;
+    int size = 0;
+    if (image->buffer_view != NULL && image->buffer_view->size <= INT_MAX)
+    {
+        const cgltf_buffer_view* view = image->buffer_view;
+        size = (int)view->size;
+        if (view->data != NULL) bytes = (const unsigned char*)view->data;
+        else if (view->buffer != NULL && view->buffer->data != NULL &&
+                 view->offset <= view->buffer->size && view->size <= view->buffer->size - view->offset)
+            bytes = (const unsigned char*)view->buffer->data + view->offset;
+    }
+    else if (image->uri != NULL)
+    {
+        ownedBytes = GLBDataLoadImageURI(modelFilename, image->uri, &size);
+        bytes = ownedBytes;
+    }
+    if (bytes == NULL || size <= 0)
+    {
+        if (ownedBytes != NULL) UnloadFileData(ownedBytes);
+        return NULL;
+    }
+
+    int components = 0;
+    *webpPixels = GLBDataIsWebP(image, bytes, size);
+    unsigned char* pixels = *webpPixels
+        ? WebPDecodeRGBA(bytes, (size_t)size, width, height)
+        : stbi_load_from_memory(bytes, size, width, height, &components, 4);
+    if (ownedBytes != NULL) UnloadFileData(ownedBytes);
+    return pixels;
+}
+
+static unsigned char* GLBDataDecodeTextureRGBA(const char* modelFilename, const cgltf_texture* texture,
+    int* width, int* height, bool* webpPixels)
+{
+    if (texture == NULL) return NULL;
+    if (texture->has_webp && texture->webp_image != NULL)
+    {
+        unsigned char* pixels = GLBDataDecodeImageRGBA(modelFilename, texture->webp_image, width, height, webpPixels);
+        if (pixels != NULL) return pixels;
+    }
+    return GLBDataDecodeImageRGBA(modelFilename, texture->image, width, height, webpPixels);
+}
+
+static int GLBDataTextureWrap(cgltf_wrap_mode wrap)
+{
+    if (wrap == cgltf_wrap_mode_clamp_to_edge) return RL_TEXTURE_WRAP_CLAMP;
+    if (wrap == cgltf_wrap_mode_mirrored_repeat) return RL_TEXTURE_WRAP_MIRROR_REPEAT;
+    return RL_TEXTURE_WRAP_REPEAT;
+}
+
+static Texture2D GLBDataLoadTextureView(const char* modelFilename, const cgltf_texture_view* view, int channel)
+{
+    Texture2D texture = { 0 };
+    if (view == NULL || view->texture == NULL) return texture;
+
+    int width = 0, height = 0;
+    bool webpPixels = false;
+    unsigned char* rgba = GLBDataDecodeTextureRGBA(modelFilename, view->texture, &width, &height, &webpPixels);
+    if (rgba == NULL || width <= 0 || height <= 0) return texture;
+
+    Image image = { 0 };
+    unsigned char* grayscale = NULL;
+    if (channel >= 0 && channel < 4)
+    {
+        grayscale = (unsigned char*)malloc((size_t)width * (size_t)height);
+        if (grayscale != NULL)
+        {
+            for (int i = 0; i < width * height; i++) grayscale[i] = rgba[i * 4 + channel];
+            image = (Image){ grayscale, width, height, 1, PIXELFORMAT_UNCOMPRESSED_GRAYSCALE };
+        }
+    }
+    else image = (Image){ rgba, width, height, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8 };
+
+    if (channel < 0 || grayscale != NULL) texture = LoadTextureFromImage(image);
+    free(grayscale);
+    if (webpPixels) WebPFree(rgba);
+    else stbi_image_free(rgba);
+
+    if (texture.id > 0)
+    {
+        GenTextureMipmaps(&texture);
+        SetTextureFilter(texture, TEXTURE_FILTER_TRILINEAR);
+        if (view->texture->sampler != NULL)
+        {
+            rlTextureParameters(texture.id, RL_TEXTURE_WRAP_S, GLBDataTextureWrap(view->texture->sampler->wrap_s));
+            rlTextureParameters(texture.id, RL_TEXTURE_WRAP_T, GLBDataTextureWrap(view->texture->sampler->wrap_t));
+        }
+    }
+    return texture;
+}
+
+static void GLBDataReplaceMaterialTexture(Material* material, int mapIndex, Texture2D replacement)
+{
+    if (replacement.id == 0) return;
+    unsigned int defaultTexture = rlGetTextureIdDefault();
+    Texture2D previous = material->maps[mapIndex].texture;
+    if (previous.id > 0 && previous.id != defaultTexture) UnloadTexture(previous);
+    material->maps[mapIndex].texture = replacement;
+}
+
 void GLBDataInit(GLBData* data)
 {
     data->model = (Model){ 0 };
@@ -89,6 +194,37 @@ void GLBDataInit(GLBData* data)
     data->meshGroundOffset = 0.0f;
 }
 
+static void GLBDataUnloadModelTextures(Model* model)
+{
+    unsigned int defaultTexture = rlGetTextureIdDefault();
+    for (int materialIndex = 0; materialIndex < model->materialCount; materialIndex++)
+    {
+        Material* material = &model->materials[materialIndex];
+        if (material->maps == NULL) continue;
+        for (int mapIndex = 0; mapIndex <= MATERIAL_MAP_BRDF; mapIndex++)
+        {
+            Texture2D texture = material->maps[mapIndex].texture;
+            if (texture.id == 0 || texture.id == defaultTexture) continue;
+            bool alreadyUnloaded = false;
+            for (int previousMaterial = 0; previousMaterial <= materialIndex && !alreadyUnloaded; previousMaterial++)
+            {
+                Material* previous = &model->materials[previousMaterial];
+                int mapLimit = previousMaterial == materialIndex ? mapIndex : MATERIAL_MAP_BRDF + 1;
+                if (previous->maps == NULL) continue;
+                for (int previousMap = 0; previousMap < mapLimit; previousMap++)
+                {
+                    if (previous->maps[previousMap].texture.id == texture.id)
+                    {
+                        alreadyUnloaded = true;
+                        break;
+                    }
+                }
+            }
+            if (!alreadyUnloaded) UnloadTexture(texture);
+        }
+    }
+}
+
 void GLBDataFree(GLBData* data)
 {
     if (data->animations != NULL)
@@ -98,6 +234,7 @@ void GLBDataFree(GLBData* data)
     }
     if (data->model.skeleton.boneCount > 0 || data->model.meshCount > 0)
     {
+        GLBDataUnloadModelTextures(&data->model);
         UnloadModel(data->model);
     }
     free(data->sourceFrameCounts);
@@ -614,114 +751,111 @@ bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSi
         {
             for (int matIdx = 0; matIdx < data->materialInfoCount; matIdx++)
             {
+                GLBMaterialInfo* info = &data->materialInfo[matIdx];
+                info->alphaMode = 0;
+                info->alphaCutoff = 0.5f;
+                info->baseColorFactor = (Vector4){ 1.0f, 1.0f, 1.0f, 1.0f };
+                info->metallicFactor = 1.0f;
+                info->roughnessFactor = 1.0f;
+                info->normalScale = 1.0f;
+                info->occlusionStrength = 1.0f;
                 // raylib material 0 is a default material; GLTF materials start at raylib index 1
                 int cgltfIdx = matIdx - 1;
                 if (cgltfIdx >= 0 && cgltfIdx < (int)data->sourceData->materials_count)
                 {
                     cgltf_material* mat = &data->sourceData->materials[cgltfIdx];
+                    info->hasPBR = mat->has_pbr_metallic_roughness;
+                    info->doubleSided = mat->double_sided;
+                    if (info->hasPBR)
+                    {
+                        const cgltf_pbr_metallic_roughness* pbr = &mat->pbr_metallic_roughness;
+                        info->baseColorFactor = (Vector4){
+                            pbr->base_color_factor[0], pbr->base_color_factor[1],
+                            pbr->base_color_factor[2], pbr->base_color_factor[3]
+                        };
+                        info->metallicFactor = pbr->metallic_factor;
+                        info->roughnessFactor = pbr->roughness_factor;
+                        info->baseColorUV = pbr->base_color_texture.has_transform && pbr->base_color_texture.transform.has_texcoord
+                            ? pbr->base_color_texture.transform.texcoord : pbr->base_color_texture.texcoord;
+                        info->metallicRoughnessUV = pbr->metallic_roughness_texture.has_transform && pbr->metallic_roughness_texture.transform.has_texcoord
+                            ? pbr->metallic_roughness_texture.transform.texcoord : pbr->metallic_roughness_texture.texcoord;
+                    }
+                    info->normalScale = mat->normal_texture.scale;
+                    info->occlusionStrength = mat->occlusion_texture.scale;
+                    info->normalUV = mat->normal_texture.has_transform && mat->normal_texture.transform.has_texcoord
+                        ? mat->normal_texture.transform.texcoord : mat->normal_texture.texcoord;
+                    info->occlusionUV = mat->occlusion_texture.has_transform && mat->occlusion_texture.transform.has_texcoord
+                        ? mat->occlusion_texture.transform.texcoord : mat->occlusion_texture.texcoord;
+                    info->emissionUV = mat->emissive_texture.has_transform && mat->emissive_texture.transform.has_texcoord
+                        ? mat->emissive_texture.transform.texcoord : mat->emissive_texture.texcoord;
+                    float emissionStrength = mat->has_emissive_strength ? mat->emissive_strength.emissive_strength : 1.0f;
+                    info->emissionFactor = (Vector3){
+                        mat->emissive_factor[0] * emissionStrength,
+                        mat->emissive_factor[1] * emissionStrength,
+                        mat->emissive_factor[2] * emissionStrength
+                    };
                     if (mat->alpha_mode == cgltf_alpha_mode_mask)
                     {
-                        data->materialInfo[matIdx].alphaMode = 1;
-                        data->materialInfo[matIdx].alphaCutoff = mat->alpha_cutoff;
+                        info->alphaMode = 1;
+                        info->alphaCutoff = mat->alpha_cutoff;
                     }
                     else if (mat->alpha_mode == cgltf_alpha_mode_blend)
                     {
-                        data->materialInfo[matIdx].alphaMode = 2;
-                        data->materialInfo[matIdx].alphaCutoff = 0.0f;
-                    }
-                    else
-                    {
-                        data->materialInfo[matIdx].alphaMode = 0;
-                        data->materialInfo[matIdx].alphaCutoff = 0.5f;
+                        info->alphaMode = 2;
+                        info->alphaCutoff = 0.0f;
                     }
                 }
             }
-            printf("INFO: Parsed %d material alpha modes from GLTF\n", data->materialInfoCount);
+            printf("INFO: Parsed %d GLTF material descriptions\n", data->materialInfoCount);
         }
     }
 
     GLBDataUndoSkinnedMeshNodeTransforms(data);
+    // Reload all core PBR maps through the local decoder. This keeps embedded,
+    // external and EXT_texture_webp images on the same material path.
     {
-        unsigned int defaultTexId = rlGetTextureIdDefault();
-        for (int matIdx = 0; matIdx < data->model.materialCount; matIdx++)
+        if (data->sourceData != NULL)
         {
-            Texture2D tex = data->model.materials[matIdx].maps[MATERIAL_MAP_ALBEDO].texture;
-            bool alreadyLoaded = (tex.id > 0 && tex.id != defaultTexId && (tex.width > 1 || tex.height > 1));
-            if (data->sourceData == NULL) continue;
-            int cgltfIdx = matIdx - 1;
-            if (cgltfIdx < 0 || cgltfIdx >= (int)data->sourceData->materials_count) continue;
-            cgltf_material* cgltfMat = &data->sourceData->materials[cgltfIdx];
-            if (!cgltfMat->has_pbr_metallic_roughness) continue;
-            cgltf_texture* cgltfTex = cgltfMat->pbr_metallic_roughness.base_color_texture.texture;
-            if (cgltfTex == NULL) continue;
+            int materialCount = (int)data->sourceData->materials_count;
+            for (int cgltfIdx = 0; cgltfIdx < materialCount; cgltfIdx++)
+            {
+                int matIdx = cgltfIdx + 1;
+                if (matIdx >= data->model.materialCount) break;
+                cgltf_material* source = &data->sourceData->materials[cgltfIdx];
+                if (!source->has_pbr_metallic_roughness) continue;
+                Material* target = &data->model.materials[matIdx];
+                const cgltf_pbr_metallic_roughness* pbr = &source->pbr_metallic_roughness;
 
-            // EXT_texture_webp stores its source separately from the standard
-            // fallback image. Prefer it when present; required-only WebP files
-            // have no cgltfTex->image at all.
-            bool hasWebPSource = (cgltfTex->has_webp && cgltfTex->webp_image != NULL);
-            cgltf_image* cgltfImg = hasWebPSource ? cgltfTex->webp_image : cgltfTex->image;
-            if (cgltfImg == NULL || (alreadyLoaded && !hasWebPSource)) continue;
-
-            const unsigned char* imgData = NULL;
-            unsigned char* ownedImgData = NULL;
-            int imgSize = 0;
-            if (cgltfImg->buffer_view != NULL && cgltfImg->buffer_view->size <= INT_MAX)
-            {
-                cgltf_buffer_view* bv = cgltfImg->buffer_view;
-                imgSize = (int)bv->size;
-                if (bv->data != NULL) imgData = (const unsigned char*)bv->data;
-                else if (bv->buffer != NULL && bv->buffer->data != NULL &&
-                         bv->offset <= bv->buffer->size && bv->size <= bv->buffer->size - bv->offset)
-                {
-                    imgData = (const unsigned char*)bv->buffer->data + bv->offset;
-                }
-            }
-            else if (cgltfImg->uri != NULL)
-            {
-                ownedImgData = GLBDataLoadImageURI(filename, cgltfImg->uri, &imgSize);
-                imgData = ownedImgData;
-            }
-            if (imgData == NULL || imgSize <= 0)
-            {
-                if (ownedImgData != NULL) MemFree(ownedImgData);
-                continue;
-            }
-
-            int w = 0, h = 0, comp = 0;
-            bool isWebP = GLBDataIsWebP(cgltfImg, imgData, imgSize);
-            unsigned char* pixels = isWebP
-                ? WebPDecodeRGBA(imgData, (size_t)imgSize, &w, &h)
-                : stbi_load_from_memory(imgData, imgSize, &w, &h, &comp, 4);
-            if (ownedImgData != NULL) MemFree(ownedImgData);
-            if (pixels != NULL)
-            {
-                Image img = { 0 };
-                img.data = pixels; img.width = w; img.height = h; img.mipmaps = 1; img.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
-                Texture2D newTex = LoadTextureFromImage(img);
-                GenTextureMipmaps(&newTex);
-                SetTextureFilter(newTex, TEXTURE_FILTER_TRILINEAR);
-                if (isWebP) WebPFree(pixels);
-                else stbi_image_free(pixels);
-                if (alreadyLoaded) UnloadTexture(tex);
-                data->model.materials[matIdx].maps[MATERIAL_MAP_ALBEDO].texture = newTex;
-                printf("INFO: Reloaded GLB texture (material %d) via %s: %dx%d\n", matIdx, isWebP ? "libwebp" : "stb_image", w, h);
-            }
-            else if (isWebP)
-            {
-                printf("WARN: Failed to decode WebP texture for material %d\n", matIdx);
+                GLBDataReplaceMaterialTexture(target, MATERIAL_MAP_ALBEDO,
+                    GLBDataLoadTextureView(filename, &pbr->base_color_texture, -1));
+                // glTF packs roughness into G and metallic into B.
+                GLBDataReplaceMaterialTexture(target, MATERIAL_MAP_ROUGHNESS,
+                    GLBDataLoadTextureView(filename, &pbr->metallic_roughness_texture, 1));
+                GLBDataReplaceMaterialTexture(target, MATERIAL_MAP_METALNESS,
+                    GLBDataLoadTextureView(filename, &pbr->metallic_roughness_texture, 2));
+                GLBDataReplaceMaterialTexture(target, MATERIAL_MAP_NORMAL,
+                    GLBDataLoadTextureView(filename, &source->normal_texture, -1));
+                GLBDataReplaceMaterialTexture(target, MATERIAL_MAP_OCCLUSION,
+                    GLBDataLoadTextureView(filename, &source->occlusion_texture, -1));
+                GLBDataReplaceMaterialTexture(target, MATERIAL_MAP_EMISSION,
+                    GLBDataLoadTextureView(filename, &source->emissive_texture, -1));
             }
         }
     }
-    // Enable mipmaps for all textures loaded by raylib's LoadModel (including those already loaded)
+    // Enable mipmaps for any maps retained from raylib's loader.
     {
         unsigned int defaultTexId = rlGetTextureIdDefault();
         for (int matIdx = 0; matIdx < data->model.materialCount; matIdx++)
         {
-            Texture2D tex = data->model.materials[matIdx].maps[MATERIAL_MAP_ALBEDO].texture;
-            if (tex.id > 0 && tex.id != defaultTexId && (tex.width > 1 || tex.height > 1))
+            for (int mapIdx = MATERIAL_MAP_ALBEDO; mapIdx <= MATERIAL_MAP_EMISSION; mapIdx++)
             {
-                GenTextureMipmaps(&tex);
-                SetTextureFilter(tex, TEXTURE_FILTER_TRILINEAR);
+                Texture2D* texture = &data->model.materials[matIdx].maps[mapIdx].texture;
+                if (texture->id > 0 && texture->id != defaultTexId &&
+                    (texture->width > 1 || texture->height > 1))
+                {
+                    if (texture->mipmaps <= 1) GenTextureMipmaps(texture);
+                    SetTextureFilter(*texture, TEXTURE_FILTER_TRILINEAR);
+                }
             }
         }
     }

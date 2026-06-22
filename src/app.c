@@ -70,6 +70,11 @@ static int NaturalStricmp(const char* a, const char* b)
     return 0;
 }
 
+static float SRGBChannelToLinear(float value)
+{
+    return value <= 0.04045f ? value / 12.92f : powf((value + 0.055f) / 1.055f, 2.4f);
+}
+
 #define RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT 24
 #define RAYGUI_IMPLEMENTATION
 #include "raygui.h"
@@ -786,10 +791,32 @@ void ApplicationUpdate(void* voidApplicationState)
     SetShaderValue(app->shader, app->uniforms.objectSpecularity, &objectSpecularity, SHADER_UNIFORM_FLOAT);
     SetShaderValue(app->shader, app->uniforms.objectGlossiness, &objectGlossiness, SHADER_UNIFORM_FLOAT);
     SetShaderValue(app->shader, app->uniforms.objectOpacity, &objectOpacity, SHADER_UNIFORM_FLOAT);
+    int usePBR = 0;
+    SetShaderValue(app->shader, app->uniforms.usePBR, &usePBR, SHADER_UNIFORM_INT);
     SetShaderValue(app->shader, app->uniforms.aoLookupResolution, &app->capsuleData.aoLookupResolution, SHADER_UNIFORM_VEC2);
     SetShaderValue(app->shader, app->uniforms.shadowLookupResolution, &app->capsuleData.shadowLookupResolution, SHADER_UNIFORM_VEC2);
-    SetShaderValueTexture(app->shader, app->uniforms.aoLookupTable, app->capsuleData.aoLookupTable);
-    SetShaderValueTexture(app->shader, app->uniforms.shadowLookupTable, app->capsuleData.shadowLookupTable);
+    // Core PBR maps occupy slots 0..5. Keep lookup and studio-light textures on
+    // fixed slots so DrawMesh() cannot overwrite or unbind them.
+    int aoLookupSlot = 6;
+    int shadowLookupSlot = 7;
+    int environmentSlot = 8;
+    rlActiveTextureSlot(aoLookupSlot);
+    rlEnableTexture(app->capsuleData.aoLookupTable.id);
+    rlActiveTextureSlot(shadowLookupSlot);
+    rlEnableTexture(app->capsuleData.shadowLookupTable.id);
+    if (app->studioLight.id != 0)
+    {
+        rlActiveTextureSlot(environmentSlot);
+        rlEnableTexture(app->studioLight.id);
+    }
+    rlActiveTextureSlot(0);
+    SetShaderValue(app->shader, app->uniforms.aoLookupTable, &aoLookupSlot, SHADER_UNIFORM_INT);
+    SetShaderValue(app->shader, app->uniforms.shadowLookupTable, &shadowLookupSlot, SHADER_UNIFORM_INT);
+    SetShaderValue(app->shader, app->uniforms.environmentMap, &environmentSlot, SHADER_UNIFORM_INT);
+    int useEnvironmentMap = app->studioLight.id != 0;
+    float environmentMaxLod = app->studioLight.mipmaps > 0 ? (float)(app->studioLight.mipmaps - 1) : 0.0f;
+    SetShaderValue(app->shader, app->uniforms.useEnvironmentMap, &useEnvironmentMap, SHADER_UNIFORM_INT);
+    SetShaderValue(app->shader, app->uniforms.environmentMaxLod, &environmentMaxLod, SHADER_UNIFORM_FLOAT);
 
     // Draw Ground
     PROFILE_BEGIN(RenderingGround);
@@ -854,10 +881,6 @@ void ApplicationUpdate(void* voidApplicationState)
             Matrix modelTransform = GLBDataGetModelTransform(glb, app->characterData.scales[i], app->scrubberSettings.inplace);
             unsigned int defaultTexId = rlGetTextureIdDefault();
 
-            // Set shader on all materials
-            for (int matIdx = 0; matIdx < glb->model.materialCount; matIdx++)
-                glb->model.materials[matIdx].shader = app->shader;
-
             // Base defaults (per-material values override below)
             SetShaderValue(app->shader, app->uniforms.objectColor, &meshColor, SHADER_UNIFORM_VEC3);
             SetShaderValue(app->shader, app->uniforms.objectOpacity, &meshOpacity, SHADER_UNIFORM_FLOAT);
@@ -875,30 +898,94 @@ void ApplicationUpdate(void* voidApplicationState)
                 int matIdx = glb->model.meshMaterial[meshIdx];
                 if (matIdx < 0 || matIdx >= glb->model.materialCount) continue;
                 Material material = glb->model.materials[matIdx];
+                material.shader = app->shader;
 
-                // Per-material alpha info from GLTF
+                // Per-material glTF PBR factors and alpha settings.
                 int alphaMode = 0;
                 float alphaCutoff = 0.5f;
+                GLBMaterialInfo* info = NULL;
                 if (glb->materialInfo != NULL && matIdx < glb->materialInfoCount)
                 {
-                    alphaMode = glb->materialInfo[matIdx].alphaMode;
-                    alphaCutoff = glb->materialInfo[matIdx].alphaCutoff;
+                    info = &glb->materialInfo[matIdx];
+                    alphaMode = info->alphaMode;
+                    alphaCutoff = info->alphaCutoff;
                 }
                 SetShaderValue(app->shader, app->uniforms.alphaMode, &alphaMode, SHADER_UNIFORM_INT);
                 SetShaderValue(app->shader, app->uniforms.alphaCutoff, &alphaCutoff, SHADER_UNIFORM_FLOAT);
 
-                // Per-material texture check
+                // Per-material texture checks. PBR maps are bound by DrawMesh().
                 int hasTexture = 0;
+                int hasMetalness = 0;
+                int hasNormal = 0;
+                int hasRoughness = 0;
+                int hasOcclusion = 0;
+                int hasEmission = 0;
                 if (app->renderSettings.drawTexture)
                 {
                     Texture2D tex = material.maps[MATERIAL_MAP_ALBEDO].texture;
-                    if (tex.id > 0 && tex.id != defaultTexId && (tex.width > 1 || tex.height > 1))
+                    if (tex.id > 0 && tex.id != defaultTexId)
                         hasTexture = 1;
+                    tex = material.maps[MATERIAL_MAP_METALNESS].texture;
+                    hasMetalness = tex.id > 0 && tex.id != defaultTexId;
+                    tex = material.maps[MATERIAL_MAP_NORMAL].texture;
+                    hasNormal = tex.id > 0 && tex.id != defaultTexId;
+                    tex = material.maps[MATERIAL_MAP_ROUGHNESS].texture;
+                    hasRoughness = tex.id > 0 && tex.id != defaultTexId;
+                    tex = material.maps[MATERIAL_MAP_OCCLUSION].texture;
+                    hasOcclusion = tex.id > 0 && tex.id != defaultTexId;
+                    tex = material.maps[MATERIAL_MAP_EMISSION].texture;
+                    hasEmission = tex.id > 0 && tex.id != defaultTexId;
                 }
                 SetShaderValue(app->shader, app->uniforms.useTexture, &hasTexture, SHADER_UNIFORM_INT);
 
+                int materialUsePBR = (info != NULL && info->hasPBR) ? 1 : 0;
+                float metallic = materialUsePBR ? info->metallicFactor : 0.0f;
+                float roughness = materialUsePBR ? info->roughnessFactor : 1.0f;
+                float materialNormalScale = materialUsePBR ? info->normalScale : 1.0f;
+                float materialOcclusionStrength = materialUsePBR ? info->occlusionStrength : 1.0f;
+                Vector3 materialEmission = materialUsePBR ? info->emissionFactor : (Vector3){ 0.0f, 0.0f, 0.0f };
+                Vector3 surfaceColor = meshColor;
+                float surfaceOpacity = meshOpacity;
+                int baseColorUV = 0, metallicRoughnessUV = 0, normalUV = 0, occlusionUV = 0, emissionUV = 0;
+                if (materialUsePBR)
+                {
+                    surfaceColor = (Vector3){ info->baseColorFactor.x, info->baseColorFactor.y, info->baseColorFactor.z };
+                    if (!hasTexture)
+                    {
+                        surfaceColor.x *= SRGBChannelToLinear(meshColor.x);
+                        surfaceColor.y *= SRGBChannelToLinear(meshColor.y);
+                        surfaceColor.z *= SRGBChannelToLinear(meshColor.z);
+                    }
+                    if (alphaMode != 0) surfaceOpacity *= info->baseColorFactor.w;
+                    baseColorUV = info->baseColorUV == 1;
+                    metallicRoughnessUV = info->metallicRoughnessUV == 1;
+                    normalUV = info->normalUV == 1;
+                    occlusionUV = info->occlusionUV == 1;
+                    emissionUV = info->emissionUV == 1;
+                }
+                SetShaderValue(app->shader, app->uniforms.usePBR, &materialUsePBR, SHADER_UNIFORM_INT);
+                SetShaderValue(app->shader, app->uniforms.useMetalnessTexture, &hasMetalness, SHADER_UNIFORM_INT);
+                SetShaderValue(app->shader, app->uniforms.useNormalTexture, &hasNormal, SHADER_UNIFORM_INT);
+                SetShaderValue(app->shader, app->uniforms.useRoughnessTexture, &hasRoughness, SHADER_UNIFORM_INT);
+                SetShaderValue(app->shader, app->uniforms.useOcclusionTexture, &hasOcclusion, SHADER_UNIFORM_INT);
+                SetShaderValue(app->shader, app->uniforms.useEmissionTexture, &hasEmission, SHADER_UNIFORM_INT);
+                SetShaderValue(app->shader, app->uniforms.metallicFactor, &metallic, SHADER_UNIFORM_FLOAT);
+                SetShaderValue(app->shader, app->uniforms.roughnessFactor, &roughness, SHADER_UNIFORM_FLOAT);
+                SetShaderValue(app->shader, app->uniforms.normalScale, &materialNormalScale, SHADER_UNIFORM_FLOAT);
+                SetShaderValue(app->shader, app->uniforms.occlusionStrength, &materialOcclusionStrength, SHADER_UNIFORM_FLOAT);
+                SetShaderValue(app->shader, app->uniforms.emissionFactor, &materialEmission, SHADER_UNIFORM_VEC3);
+                SetShaderValue(app->shader, app->uniforms.baseColorUV, &baseColorUV, SHADER_UNIFORM_INT);
+                SetShaderValue(app->shader, app->uniforms.metallicRoughnessUV, &metallicRoughnessUV, SHADER_UNIFORM_INT);
+                SetShaderValue(app->shader, app->uniforms.normalUV, &normalUV, SHADER_UNIFORM_INT);
+                SetShaderValue(app->shader, app->uniforms.occlusionUV, &occlusionUV, SHADER_UNIFORM_INT);
+                SetShaderValue(app->shader, app->uniforms.emissionUV, &emissionUV, SHADER_UNIFORM_INT);
+                SetShaderValue(app->shader, app->uniforms.objectColor, &surfaceColor, SHADER_UNIFORM_VEC3);
+                SetShaderValue(app->shader, app->uniforms.objectOpacity, &surfaceOpacity, SHADER_UNIFORM_FLOAT);
+
                 // Screen-door (alphaMode 2) uses discard; no depth-mask hack needed
-                bool needsDepthMaskHack = (meshOpacity < 1.0f && alphaMode != 2);
+                bool needsDepthMaskHack = (surfaceOpacity < 1.0f && alphaMode != 2);
+                bool disableCulling = info != NULL && info->doubleSided;
+                if (disableCulling) { rlDrawRenderBatchActive(); rlDisableBackfaceCulling(); }
                 if (needsDepthMaskHack) { rlDrawRenderBatchActive(); rlDisableDepthMask(); }
                 DrawMesh(mesh, material, modelTransform);
 
@@ -907,6 +994,8 @@ void ApplicationUpdate(void* voidApplicationState)
                 {
                     rlDrawRenderBatchActive();
                     rlEnableWireMode();
+                    int wireUsePBR = 0;
+                    SetShaderValue(app->shader, app->uniforms.usePBR, &wireUsePBR, SHADER_UNIFORM_INT);
                     SetShaderValue(app->shader, app->uniforms.useTexture, &noTexture, SHADER_UNIFORM_INT);
                     int opaqueAlpha = 0;
                     SetShaderValue(app->shader, app->uniforms.alphaMode, &opaqueAlpha, SHADER_UNIFORM_INT);
@@ -916,12 +1005,14 @@ void ApplicationUpdate(void* voidApplicationState)
                     rlDrawRenderBatchActive();
                     rlDisableWireMode();
                     // Restore per-mesh state (objectColor is per-character but kept in sync)
-                    SetShaderValue(app->shader, app->uniforms.objectColor, &meshColor, SHADER_UNIFORM_VEC3);
+                    SetShaderValue(app->shader, app->uniforms.objectColor, &surfaceColor, SHADER_UNIFORM_VEC3);
                     SetShaderValue(app->shader, app->uniforms.useTexture, &hasTexture, SHADER_UNIFORM_INT);
                     SetShaderValue(app->shader, app->uniforms.alphaMode, &alphaMode, SHADER_UNIFORM_INT);
+                    SetShaderValue(app->shader, app->uniforms.usePBR, &materialUsePBR, SHADER_UNIFORM_INT);
                 }
 
                 if (needsDepthMaskHack) { rlDrawRenderBatchActive(); rlEnableDepthMask(); }
+                if (disableCulling) { rlDrawRenderBatchActive(); rlEnableBackfaceCulling(); }
             }
         }
     }
@@ -930,6 +1021,8 @@ void ApplicationUpdate(void* voidApplicationState)
     PROFILE_BEGIN(RenderingCapsules);
     if (app->renderSettings.drawCapsules)
     {
+        int capsuleUsePBR = 0;
+        SetShaderValue(app->shader, app->uniforms.usePBR, &capsuleUsePBR, SHADER_UNIFORM_INT);
         for (int i = 0; i < app->capsuleData.capsuleCount; i++)
         {
             app->capsuleData.capsuleSort[i].index = i;
@@ -984,6 +1077,17 @@ void ApplicationUpdate(void* voidApplicationState)
         }
     }
     PROFILE_END(RenderingCapsules);
+
+    rlActiveTextureSlot(aoLookupSlot);
+    rlDisableTexture();
+    rlActiveTextureSlot(shadowLookupSlot);
+    rlDisableTexture();
+    if (app->studioLight.id != 0)
+    {
+        rlActiveTextureSlot(environmentSlot);
+        rlDisableTexture();
+    }
+    rlActiveTextureSlot(0);
 
     if (app->renderSettings.drawGrid) DrawGrid(20, 1.0f);
     if (app->renderSettings.drawOrigin) DrawTransform((Vector3){ 0.0f, 0.01f, 0.0f }, QuaternionIdentity(), 1.0f);

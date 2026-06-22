@@ -42,6 +42,7 @@ const char* shaderVS = GLSL_SHADER(
 
 in vec3 vertexPosition;
 in vec2 vertexTexCoord;
+in vec2 vertexTexCoord2;
 in vec3 vertexNormal;
 
 uniform int isCapsule;
@@ -57,6 +58,7 @@ uniform mat4 matProjection;
 
 out vec3 fragPosition;
 out vec2 fragTexCoord;
+out vec2 fragTexCoord2;
 out vec3 fragNormal;
 
 vec3 Rotate(in vec4 q, vec3 v)
@@ -75,6 +77,7 @@ vec3 CapsuleStretch(vec3 pos, float hlength, float radius)
 void main()
 {
     fragTexCoord = vertexTexCoord;
+    fragTexCoord2 = vertexTexCoord2;
 
     if (isCapsule == 1)
     {
@@ -99,6 +102,7 @@ const char* shaderFS = GLSL_SHADER_WITH_PRECISION(
 
 in vec3 fragPosition;
 in vec2 fragTexCoord;
+in vec2 fragTexCoord2;
 in vec3 fragNormal;
 
 uniform vec3 objectColor;
@@ -107,7 +111,32 @@ uniform float objectGlossiness;
 uniform float objectOpacity;
 
 uniform sampler2D texture0;
+uniform sampler2D texture1;
+uniform sampler2D texture2;
+uniform sampler2D texture3;
+uniform sampler2D texture4;
+uniform sampler2D texture5;
 uniform int useTexture;
+
+uniform int usePBR;
+uniform int useMetalnessTexture;
+uniform int useNormalTexture;
+uniform int useRoughnessTexture;
+uniform int useOcclusionTexture;
+uniform int useEmissionTexture;
+uniform float metallicFactor;
+uniform float roughnessFactor;
+uniform float normalScale;
+uniform float occlusionStrength;
+uniform vec3 emissionFactor;
+uniform int baseColorUV;
+uniform int metallicRoughnessUV;
+uniform int normalUV;
+uniform int occlusionUV;
+uniform int emissionUV;
+uniform sampler2D environmentMap;
+uniform int useEnvironmentMap;
+uniform float environmentMaxLod;
 
 uniform int alphaMode;
 uniform float alphaCutoff;
@@ -145,16 +174,70 @@ uniform float ambientStrength;
 uniform float groundStrength;
 uniform float exposure;
 
+// PBR lighting adjustment coefficients
+const float PBR_EXPOSURE_ADJUSTMENT = 1.875;
+const float PBR_SUN_ADJUSTMENT = 4.0;
+const float PBR_SKY_ADJUSTMENT = 8.0;
+const float PBR_AMBIENT_ADJUSTMENT = 0.0;
+const float PBR_GROUND_ADJUSTMENT = 10.0;
+
 out vec4 finalColor;
 
-vec3 ToGamma(in vec3 col)
+vec3 SRGBToLinear(in vec3 color)
 {
-    return vec3(pow(col.x, 2.2), pow(col.y, 2.2), pow(col.z, 2.2));
+    color = max(color, vec3(0.0));
+    vec3 low = color / 12.92;
+    vec3 high = pow((color + 0.055) / 1.055, vec3(2.4));
+    return mix(low, high, step(vec3(0.04045), color));
 }
 
-vec3 FromGamma(in vec3 col)
+vec3 LinearToSRGB(in vec3 color)
 {
-    return vec3(pow(col.x, 1.0/2.2), pow(col.y, 1.0/2.2), pow(col.z, 1.0/2.2));
+    color = max(color, vec3(0.0));
+    vec3 low = color * 12.92;
+    vec3 high = 1.055 * pow(color, vec3(1.0 / 2.4)) - 0.055;
+    return mix(low, high, step(vec3(0.0031308), color));
+}
+
+// Preserve the original display calibration for procedural ground/capsules.
+// The legacy lighting model was authored around this inverse gamma pair.
+vec3 LegacyFromGamma(in vec3 color)
+{
+    return pow(max(color, vec3(0.0)), vec3(1.0 / 2.2));
+}
+
+vec3 LegacyToGamma(in vec3 color)
+{
+    return pow(max(color, vec3(0.0)), vec3(2.2));
+}
+
+vec3 AgXContrastApprox(in vec3 x)
+{
+    vec3 x2 = x * x;
+    vec3 x4 = x2 * x2;
+    return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 -
+        6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232;
+}
+
+// Compact shader approximation of Blender's default AgX Base view transform.
+// Input and output are linear Rec. 709; the final display encoding happens below.
+vec3 AgXToneMapping(in vec3 color)
+{
+    color = vec3(
+        dot(color, vec3(0.8424790623, 0.0423282423, 0.0423756549)),
+        dot(color, vec3(0.0784336000, 0.8784686365, 0.0784336000)),
+        dot(color, vec3(0.0792237451, 0.0791661275, 0.8791429738)));
+
+    const float minEV = -12.47393;
+    const float maxEV = 4.026069;
+    color = clamp((log2(max(color, vec3(1e-10))) - minEV) / (maxEV - minEV), 0.0, 1.0);
+    color = AgXContrastApprox(color);
+
+    color = vec3(
+        dot(color, vec3(1.1968790051, -0.0528968518, -0.0529716355)),
+        dot(color, vec3(-0.0980208811, 1.1519031299, -0.0980434501)),
+        dot(color, vec3(-0.0990297441, -0.0989611768, 1.1510736726)));
+    return pow(max(color, vec3(0.0)), vec3(2.2));
 }
 
 float Saturate(in float x)
@@ -165,6 +248,91 @@ float Saturate(in float x)
 float Square(in float x)
 {
     return x * x;
+}
+
+vec2 MaterialUV(in int uvSet)
+{
+    return uvSet == 1 ? fragTexCoord2 : fragTexCoord;
+}
+
+vec3 NormalFromMap(in vec3 position, in vec3 normal, in vec2 uv, in float scale)
+{
+    vec3 mapNormal = texture(texture2, uv).xyz * 2.0 - 1.0;
+    mapNormal.xy *= scale;
+
+    vec3 dpdx = dFdx(position);
+    vec3 dpdy = dFdy(position);
+    vec2 duvdx = dFdx(uv);
+    vec2 duvdy = dFdy(uv);
+    float determinant = duvdx.x * duvdy.y - duvdx.y * duvdy.x;
+    if (abs(determinant) < 1e-8) return normal;
+
+    vec3 tangent = normalize((dpdx * duvdy.y - dpdy * duvdx.y) / determinant);
+    tangent = normalize(tangent - normal * dot(normal, tangent));
+    vec3 bitangent = normalize(cross(normal, tangent)) * (determinant < 0.0 ? -1.0 : 1.0);
+    return normalize(mat3(tangent, bitangent, normal) * mapNormal);
+}
+
+vec3 FresnelSchlick(in float cosTheta, in vec3 f0)
+{
+    return f0 + (1.0 - f0) * pow(1.0 - Saturate(cosTheta), 5.0);
+}
+
+float DistributionGGX(in vec3 normal, in vec3 halfway, in float roughness)
+{
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float nDotH = max(dot(normal, halfway), 0.0);
+    float d = nDotH * nDotH * (a2 - 1.0) + 1.0;
+    return a2 / max(PI * d * d, 1e-6);
+}
+
+float VisibilitySmithGGXCorrelated(in float nDotV, in float nDotL, in float roughness)
+{
+    float alpha = roughness * roughness;
+    float alpha2 = alpha * alpha;
+    float ggxV = nDotL * sqrt(nDotV * nDotV * (1.0 - alpha2) + alpha2);
+    float ggxL = nDotV * sqrt(nDotL * nDotL * (1.0 - alpha2) + alpha2);
+    return 0.5 / max(ggxV + ggxL, 1e-6);
+}
+
+vec3 EnvironmentBRDF(in vec3 f0, in float nDotV, in float roughness)
+{
+    vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
+    vec4 c1 = vec4(1.0, 0.0425, 1.04, -0.04);
+    vec4 r = roughness * c0 + c1;
+    float a004 = min(r.x * r.x, exp2(-9.28 * nDotV)) * r.x + r.y;
+    vec2 ab = vec2(-1.04, 1.04) * a004 + r.zw;
+    return max(f0 * ab.x + ab.y, vec3(0.0));
+}
+
+vec2 EnvironmentUV(in vec3 direction)
+{
+    direction = normalize(direction);
+    return vec2(fract(atan(direction.z, direction.x) / (2.0 * PI) + 0.5),
+        acos(clamp(direction.y, -1.0, 1.0)) / PI);
+}
+
+vec3 EnvironmentRadiance(in vec3 direction, in float perceptualRoughness)
+{
+    float lod = clamp(perceptualRoughness, 0.0, 1.0) * environmentMaxLod;
+    return textureLod(environmentMap, EnvironmentUV(direction), lod).rgb;
+}
+
+vec3 EnvironmentDiffuseIrradiance(in vec3 normal)
+{
+    // A few high-mip samples approximate Blender's cosine-convolved irradiance
+    // while keeping this single-pass viewer inexpensive.
+    vec3 axis = abs(normal.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 tangent = normalize(cross(axis, normal));
+    vec3 bitangent = cross(normal, tangent);
+    float lod = min(environmentMaxLod, 5.0);
+    vec3 result = textureLod(environmentMap, EnvironmentUV(normal), lod).rgb * 0.4;
+    result += textureLod(environmentMap, EnvironmentUV(normalize(normal + 0.85 * tangent)), lod).rgb * 0.15;
+    result += textureLod(environmentMap, EnvironmentUV(normalize(normal - 0.85 * tangent)), lod).rgb * 0.15;
+    result += textureLod(environmentMap, EnvironmentUV(normalize(normal + 0.85 * bitangent)), lod).rgb * 0.15;
+    result += textureLod(environmentMap, EnvironmentUV(normalize(normal - 0.85 * bitangent)), lod).rgb * 0.15;
+    return result;
 }
 
 float FastAcos(in float x)
@@ -318,6 +486,10 @@ void main()
         nor = CapsuleNormal(pos, capsuleStart, capsuleVector);
     }
 
+    nor = normalize(nor);
+    if (usePBR == 1 && useNormalTexture == 1)
+        nor = NormalFromMap(pos, nor, MaterialUV(normalUV), normalScale);
+
     float sunShadow = 1.0;
     for (int i = 0; i < shadowCapsuleCount; i++)
     {
@@ -339,52 +511,111 @@ void main()
             aoCapsuleRadii[i]));
     }
 
-    vec3 texColor = FromGamma(texture(texture0, uvs).rgb);
+    vec2 baseUVs = usePBR == 1 ? MaterialUV(baseColorUV) : uvs;
+    vec4 baseSample = texture(texture0, baseUVs);
+    vec3 final;
 
-    float gridFine = Grid(20.0 * uvs, 0.025);
-    float gridCoarse = Grid(2.0 * uvs, 0.02);
-    float check = Checker(2.0 * uvs);
+    if (usePBR == 1)
+    {
+        // glTF factors are linear multipliers; only color textures use sRGB.
+        vec3 albedo = objectColor;
+        if (useTexture == 1) albedo *= SRGBToLinear(baseSample.rgb);
 
-    vec3 proceduralColor = FromGamma(objectColor) * mix(mix(mix(0.9, 0.95, check), 0.85, gridFine), 1.0, gridCoarse);
-    vec3 albedo = mix(proceduralColor, texColor, float(useTexture));
-    float specularity = objectSpecularity * mix(mix(0.0, 0.75, check), 1.0, gridCoarse);
-    
-    vec3 eyeDir = normalize(pos - cameraPosition);
+        vec2 mrUVs = MaterialUV(metallicRoughnessUV);
+        float metallic = metallicFactor;
+        float roughness = roughnessFactor;
+        if (useMetalnessTexture == 1) metallic *= texture(texture1, mrUVs).r;
+        if (useRoughnessTexture == 1) roughness *= texture(texture3, mrUVs).r;
+        metallic = Saturate(metallic);
+        roughness = clamp(roughness, 0.045, 1.0);
 
-    vec3 lightSunColor = FromGamma(sunColor);
-    vec3 lightSunHalf = normalize(sunDir + eyeDir);
+        float materialAO = 1.0;
+        if (useOcclusionTexture == 1)
+            materialAO = mix(1.0, texture(texture4, MaterialUV(occlusionUV)).r, Saturate(occlusionStrength));
 
-    vec3 lightSkyColor = FromGamma(skyColor);
-    vec3 skyDir = vec3(0.0, -1.0, 0.0);
-    vec3 lightSkyHalf = normalize(skyDir + eyeDir);
+        vec3 emission = emissionFactor;
+        if (useEmissionTexture == 1)
+            emission *= SRGBToLinear(texture(texture5, MaterialUV(emissionUV)).rgb);
 
-    float sunFactorDiff = max(dot(nor, -sunDir), 0.0);
-    float sunFactorSpec = specularity *
-        ((objectGlossiness+2.0) / (8.0 * PI)) *
-        pow(max(dot(nor, lightSunHalf), 0.0), objectGlossiness);
+        vec3 viewDir = normalize(cameraPosition - pos);
+        vec3 lightDir = normalize(-sunDir);
+        vec3 halfway = normalize(viewDir + lightDir);
+        float nDotV = max(dot(nor, viewDir), 0.0);
+        float nDotL = max(dot(nor, lightDir), 0.0);
 
-    float skyFactorDiff = max(dot(nor, -skyDir), 0.0);
-    float skyFactorSpec = specularity *
-        ((objectGlossiness+2.0) / (8.0 * PI)) *
-        pow(max(dot(nor, lightSkyHalf), 0.0), objectGlossiness);
+        vec3 f0 = mix(vec3(0.04), albedo, metallic);
+        vec3 fresnel = FresnelSchlick(max(dot(halfway, viewDir), 0.0), f0);
+        float distribution = DistributionGGX(nor, halfway, roughness);
+        float visibility = VisibilitySmithGGXCorrelated(nDotV, nDotL, roughness);
+        vec3 specularBRDF = distribution * visibility * fresnel;
+        vec3 diffuseBRDF = (vec3(1.0) - fresnel) * (1.0 - metallic) * albedo / PI;
+        vec3 lightSunColor = SRGBToLinear(sunColor);
+        // The UI light strength historically represented Lambert exit radiance.
+        // Convert it to incident radiance so the physically-correct 1/PI diffuse
+        // term does not make PBR materials about PI times darker.
+        vec3 direct = sunShadow * (PI * sunStrength * PBR_SUN_ADJUSTMENT) * lightSunColor *
+            (diffuseBRDF + specularBRDF) * nDotL;
 
-    float groundFactorDiff = max(dot(nor, skyDir), 0.0);
-    
-    vec3 ambient = ambShadow * ambientStrength * lightSkyColor * albedo;
+        vec3 lightSkyColor = SRGBToLinear(skyColor);
+        float skyDiffuse = max(nor.y, 0.0);
+        float groundDiffuse = max(-nor.y, 0.0);
+        vec3 diffuseLighting = useEnvironmentMap == 1
+            ? (ambientStrength * PBR_AMBIENT_ADJUSTMENT) * EnvironmentDiffuseIrradiance(nor)
+            : (ambientStrength * PBR_AMBIENT_ADJUSTMENT) * lightSkyColor;
+        diffuseLighting += lightSkyColor *
+            (skyStrength * PBR_SKY_ADJUSTMENT * skyDiffuse + groundStrength * PBR_GROUND_ADJUSTMENT * groundDiffuse);
+        vec3 indirectDiffuse = albedo * (1.0 - metallic) * diffuseLighting;
 
-    vec3 diffuse = sunShadow * sunStrength * lightSunColor * albedo * sunFactorDiff +
-        groundStrength * lightSkyColor * albedo * groundFactorDiff +
-        skyStrength * lightSkyColor * albedo * skyFactorDiff;
+        vec3 reflectionDir = reflect(-viewDir, nor);
+        // Sample the Blender studio environment by reflection direction; the
+        // sky/ground approximation remains as a fallback and optional fill.
+        float filteredReflectionY = mix(reflectionDir.y, nor.y, roughness * roughness);
+        float reflectionSky = Saturate(filteredReflectionY * 0.5 + 0.5);
+        vec3 reflectionColor = useEnvironmentMap == 1
+            ? (ambientStrength * PBR_AMBIENT_ADJUSTMENT) * EnvironmentRadiance(reflectionDir, roughness)
+            : (ambientStrength * PBR_AMBIENT_ADJUSTMENT) * lightSkyColor * mix(0.35, 1.0, reflectionSky);
+        reflectionColor += lightSkyColor * mix(0.35, 1.0, reflectionSky) *
+            mix(groundStrength * PBR_GROUND_ADJUSTMENT, skyStrength * PBR_SKY_ADJUSTMENT, reflectionSky);
+        vec3 indirectSpecular = EnvironmentBRDF(f0, nDotV, roughness) *
+            reflectionColor;
 
-    float specular = sunShadow * sunStrength * sunFactorSpec + skyStrength * skyFactorSpec;
-
-    vec3 final = diffuse + ambient + specular;
+        final = direct + ambShadow * materialAO * (indirectDiffuse + indirectSpecular) + emission;
+    }
+    else
+    {
+        vec3 texColor = LegacyFromGamma(baseSample.rgb);
+        float gridFine = Grid(20.0 * uvs, 0.025);
+        float gridCoarse = Grid(2.0 * uvs, 0.02);
+        float check = Checker(2.0 * uvs);
+        vec3 proceduralColor = LegacyFromGamma(objectColor) * mix(mix(mix(0.9, 0.95, check), 0.85, gridFine), 1.0, gridCoarse);
+        vec3 albedo = mix(proceduralColor, texColor, float(useTexture));
+        float specularity = objectSpecularity * mix(mix(0.0, 0.75, check), 1.0, gridCoarse);
+        vec3 eyeDir = normalize(pos - cameraPosition);
+        vec3 lightSunColor = LegacyFromGamma(sunColor);
+        vec3 lightSunHalf = normalize(sunDir + eyeDir);
+        vec3 lightSkyColor = LegacyFromGamma(skyColor);
+        vec3 skyDir = vec3(0.0, -1.0, 0.0);
+        vec3 lightSkyHalf = normalize(skyDir + eyeDir);
+        float sunFactorDiff = max(dot(nor, -sunDir), 0.0);
+        float sunFactorSpec = specularity * ((objectGlossiness+2.0) / (8.0 * PI)) *
+            pow(max(dot(nor, lightSunHalf), 0.0), objectGlossiness);
+        float skyFactorDiff = max(dot(nor, -skyDir), 0.0);
+        float skyFactorSpec = specularity * ((objectGlossiness+2.0) / (8.0 * PI)) *
+            pow(max(dot(nor, lightSkyHalf), 0.0), objectGlossiness);
+        float groundFactorDiff = max(dot(nor, skyDir), 0.0);
+        vec3 ambient = ambShadow * ambientStrength * lightSkyColor * albedo;
+        vec3 diffuse = sunShadow * sunStrength * lightSunColor * albedo * sunFactorDiff +
+            groundStrength * lightSkyColor * albedo * groundFactorDiff +
+            skyStrength * lightSkyColor * albedo * skyFactorDiff;
+        float specular = sunShadow * sunStrength * sunFactorSpec + skyStrength * skyFactorSpec;
+        final = diffuse + ambient + specular;
+    }
 
     // Screen-door transparency using 8x8 Bayer dither matrix
     if (alphaMode == 1)
     {
         // MASK mode: hard alpha cutoff
-        float texAlpha = texture(texture0, uvs).a;
+        float texAlpha = baseSample.a * objectOpacity;
         if (texAlpha < alphaCutoff) discard;
     }
     else if (alphaMode == 2)
@@ -400,12 +631,17 @@ void main()
             15.0/64.0, 47.0/64.0,  7.0/64.0, 39.0/64.0, 13.0/64.0, 45.0/64.0,  5.0/64.0, 37.0/64.0,
             63.0/64.0, 31.0/64.0, 55.0/64.0, 23.0/64.0, 61.0/64.0, 29.0/64.0, 53.0/64.0, 21.0/64.0
         );
-        float texAlpha = texture(texture0, uvs).a * objectOpacity;
+        float texAlpha = baseSample.a * objectOpacity;
         ivec2 pixel = ivec2(int(gl_FragCoord.x) % 8, int(gl_FragCoord.y) % 8);
         if (texAlpha <= bayer8[pixel.y * 8 + pixel.x]) discard;
     }
 
-    finalColor = vec4(ToGamma(exposure * final), objectOpacity);
+    if (usePBR == 1)
+    {
+        vec3 displayLinear = AgXToneMapping(max((exposure * PBR_EXPOSURE_ADJUSTMENT) * final, vec3(0.0)));
+        finalColor = vec4(LinearToSRGB(displayLinear), objectOpacity);
+    }
+    else finalColor = vec4(LegacyToGamma(exposure * final), objectOpacity);
 }
 
 );
@@ -443,6 +679,33 @@ void ShaderUniformsInit(ShaderUniforms* uniforms, Shader shader)
     uniforms->useTexture = GetShaderLocation(shader, "useTexture");
     uniforms->alphaMode = GetShaderLocation(shader, "alphaMode");
     uniforms->alphaCutoff = GetShaderLocation(shader, "alphaCutoff");
+
+    uniforms->usePBR = GetShaderLocation(shader, "usePBR");
+    uniforms->useMetalnessTexture = GetShaderLocation(shader, "useMetalnessTexture");
+    uniforms->useNormalTexture = GetShaderLocation(shader, "useNormalTexture");
+    uniforms->useRoughnessTexture = GetShaderLocation(shader, "useRoughnessTexture");
+    uniforms->useOcclusionTexture = GetShaderLocation(shader, "useOcclusionTexture");
+    uniforms->useEmissionTexture = GetShaderLocation(shader, "useEmissionTexture");
+    uniforms->metallicFactor = GetShaderLocation(shader, "metallicFactor");
+    uniforms->roughnessFactor = GetShaderLocation(shader, "roughnessFactor");
+    uniforms->normalScale = GetShaderLocation(shader, "normalScale");
+    uniforms->occlusionStrength = GetShaderLocation(shader, "occlusionStrength");
+    uniforms->emissionFactor = GetShaderLocation(shader, "emissionFactor");
+    uniforms->baseColorUV = GetShaderLocation(shader, "baseColorUV");
+    uniforms->metallicRoughnessUV = GetShaderLocation(shader, "metallicRoughnessUV");
+    uniforms->normalUV = GetShaderLocation(shader, "normalUV");
+    uniforms->occlusionUV = GetShaderLocation(shader, "occlusionUV");
+    uniforms->emissionUV = GetShaderLocation(shader, "emissionUV");
+    uniforms->environmentMap = GetShaderLocation(shader, "environmentMap");
+    uniforms->useEnvironmentMap = GetShaderLocation(shader, "useEnvironmentMap");
+    uniforms->environmentMaxLod = GetShaderLocation(shader, "environmentMaxLod");
+
+    // DrawMesh() binds material maps through this location table.
+    shader.locs[SHADER_LOC_MAP_METALNESS] = GetShaderLocation(shader, "texture1");
+    shader.locs[SHADER_LOC_MAP_NORMAL] = GetShaderLocation(shader, "texture2");
+    shader.locs[SHADER_LOC_MAP_ROUGHNESS] = GetShaderLocation(shader, "texture3");
+    shader.locs[SHADER_LOC_MAP_OCCLUSION] = GetShaderLocation(shader, "texture4");
+    shader.locs[SHADER_LOC_MAP_EMISSION] = GetShaderLocation(shader, "texture5");
 
     uniforms->sunStrength = GetShaderLocation(shader, "sunStrength");
     uniforms->sunDir = GetShaderLocation(shader, "sunDir");

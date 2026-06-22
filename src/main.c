@@ -17,6 +17,7 @@
 #include "render_settings.h"
 #include "argparse.h"
 #include "profile.h"
+#include "studio_light.h"
 
 #if defined(PLATFORM_WEB)
 #include <emscripten/emscripten.h>
@@ -371,6 +372,7 @@ int main(int argc, char** argv)
 
     app.shader = LoadShaderFromMemory(shaderVS, shaderFS);
     ShaderUniformsInit(&app.uniforms, app.shader);
+    app.studioLight = StudioLightLoad();
 
     app.groundPlaneMesh = GenMeshPlane(2.0f, 2.0f, 1, 1);
     app.groundPlaneModel = LoadModelFromMesh(app.groundPlaneMesh);
@@ -428,6 +430,7 @@ int main(int argc, char** argv)
     CharacterDataFree(&app.characterData);
     UnloadModel(app.capsuleModel);
     UnloadModel(app.groundPlaneModel);
+    if (app.studioLight.id != 0) UnloadTexture(app.studioLight);
     UnloadShader(app.shader);
 #if defined(_WIN32) && !defined(PLATFORM_WEB)
     if (app.reuseMailslot && app.reuseMailslot != INVALID_HANDLE_VALUE)

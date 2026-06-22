@@ -20,6 +20,19 @@ typedef struct GLBMaterialInfo
 {
     int alphaMode;
     float alphaCutoff;
+    bool hasPBR;
+    bool doubleSided;
+    Vector4 baseColorFactor;
+    float metallicFactor;
+    float roughnessFactor;
+    float normalScale;
+    float occlusionStrength;
+    Vector3 emissionFactor;
+    int baseColorUV;
+    int metallicRoughnessUV;
+    int normalUV;
+    int occlusionUV;
+    int emissionUV;
 } GLBMaterialInfo;
 
 // Structure for storing GLB model and animation data
