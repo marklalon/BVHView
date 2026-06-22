@@ -233,7 +233,7 @@ void GuiCustomGroupBox(Rectangle bounds, const char* text)
 
 void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterData, int argc, char** argv)
 {
-    GuiCustomGroupBox((Rectangle){ 20, 10, 190, 240 }, "Info");
+    GuiCustomGroupBox((Rectangle){ 20, 10, 190, 280 }, "Info");
 
     int ci = characterData->active;
     bool hasCharacter = characterData->count > 0 && ci >= 0 && ci < characterData->count;
@@ -264,14 +264,112 @@ void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterData, int argc,
         }
         GuiLabel((Rectangle){ 30, 50, 170, 20 }, TextFormat("Vertex: %d", vertexCount));
         GuiLabel((Rectangle){ 30, 70, 170, 20 }, TextFormat("Face: %d", faceCount));
+
+        // --- UV info ---
+        bool hasUV0 = false, hasUV1 = false;
+        for (int m = 0; m < model->meshCount; m++)
+        {
+            if (model->meshes[m].texcoords != NULL) hasUV0 = true;
+            if (model->meshes[m].texcoords2 != NULL) hasUV1 = true;
+        }
+        char uvFull[128] = "UV: ";
+        if (hasUV0) strcat(uvFull, "[UV0]");
+        if (hasUV1) strcat(uvFull, "[UV1]");
+        if (!hasUV0 && !hasUV1) strcat(uvFull, "None");
+        char uvDisp[128];
+        strncpy(uvDisp, uvFull, sizeof(uvDisp));
+        uvDisp[sizeof(uvDisp) - 1] = '\0';
+        Rectangle uvRect = { 30, 90, 170, 20 };
+        if (MeasureText(uvDisp, 10) > uvRect.width - 4)
+        {
+            int maxChars = (int)((uvRect.width - 4) / 5.5f);
+            int fullLen = (int)strlen(uvDisp);
+            if (maxChars < fullLen && maxChars > 4) { uvDisp[maxChars - 3] = '.'; uvDisp[maxChars - 2] = '.'; uvDisp[maxChars - 1] = '.'; uvDisp[maxChars] = '\0'; }
+        }
+        GuiLabel(uvRect, uvDisp);
+        Vector2 mousePos = GetMousePosition();
+        if (CheckCollisionPointRec(mousePos, uvRect))
+        {
+            int ttW = MeasureText(uvFull, 10);
+            Rectangle ttR = { uvRect.x, uvRect.y - 24, (float)ttW + 10, 22 };
+            DrawRectangleRec(ttR, (Color){ 40, 40, 40, 230 });
+            DrawRectangleLinesEx(ttR, 1, (Color){ 140, 140, 143, 255 });
+            DrawText(uvFull, (int)ttR.x + 5, (int)ttR.y + 6, 10, LIGHTGRAY);
+        }
+
+        // --- Texture info ---
+        char texFull[512] = "Texture: ";
+        if (characterData->glbData[ci].sourceData != NULL)
+        {
+            const cgltf_data* src = characterData->glbData[ci].sourceData;
+            int pos = (int)strlen(texFull);
+            // Track which texture indices we've already listed
+            char seen[256] = {0};
+            for (int i = 0; i < (int)src->materials_count && pos < (int)sizeof(texFull) - 64; i++)
+            {
+                const cgltf_material* mat = &src->materials[i];
+                // Collect all texture views from a material
+                const cgltf_texture_view* views[] = {
+                    &mat->pbr_metallic_roughness.base_color_texture,
+                    &mat->pbr_metallic_roughness.metallic_roughness_texture,
+                    &mat->normal_texture,
+                    &mat->occlusion_texture,
+                    &mat->emissive_texture,
+                };
+                for (int v = 0; v < 5; v++)
+                {
+                    cgltf_texture* tex = views[v]->texture;
+                    if (tex == NULL) continue;
+                    int texIdx = (int)(tex - src->textures);
+                    if (texIdx < 0 || texIdx >= 256 || seen[texIdx]) continue;
+                    seen[texIdx] = 1;
+                    const char* tName = tex->name;
+                    if (tName == NULL || tName[0] == '\0')
+                        tName = (tex->image && tex->image->name) ? tex->image->name : NULL;
+                    if (tName == NULL || tName[0] == '\0')
+                        tName = (tex->has_webp && tex->webp_image && tex->webp_image->name)
+                            ? tex->webp_image->name : NULL;
+                    char idxFallback[32];
+                    if (tName == NULL || tName[0] == '\0')
+                    {
+                        snprintf(idxFallback, sizeof(idxFallback), "Image_%d", texIdx);
+                        tName = idxFallback;
+                    }
+                    int n = snprintf(texFull + pos, sizeof(texFull) - pos, "[%s]", tName);
+                    if (n > 0) pos += (n < (int)(sizeof(texFull) - pos)) ? n : (int)(sizeof(texFull) - pos - 1);
+                }
+            }
+        }
+        if (strlen(texFull) <= 9) strcat(texFull, "None");
+        char texDisp[512];
+        strncpy(texDisp, texFull, sizeof(texDisp));
+        texDisp[sizeof(texDisp) - 1] = '\0';
+        Rectangle texRect = { 30, 110, 170, 20 };
+        if (MeasureText(texDisp, 10) > texRect.width - 4)
+        {
+            int maxChars = (int)((texRect.width - 4) / 5.5f);
+            int fullLen = (int)strlen(texDisp);
+            if (maxChars < fullLen && maxChars > 4) { texDisp[maxChars - 3] = '.'; texDisp[maxChars - 2] = '.'; texDisp[maxChars - 1] = '.'; texDisp[maxChars] = '\0'; }
+        }
+        GuiLabel(texRect, texDisp);
+        if (CheckCollisionPointRec(mousePos, texRect))
+        {
+            int ttW = MeasureText(texFull, 10);
+            Rectangle ttR = { texRect.x, texRect.y - 24, (float)ttW + 10, 22 };
+            DrawRectangleRec(ttR, (Color){ 40, 40, 40, 230 });
+            DrawRectangleLinesEx(ttR, 1, (Color){ 140, 140, 143, 255 });
+            DrawText(texFull, (int)ttR.x + 5, (int)ttR.y + 6, 10, LIGHTGRAY);
+        }
     }
     else
     {
         GuiLabel((Rectangle){ 30, 50, 170, 20 }, "Vertex: None");
         GuiLabel((Rectangle){ 30, 70, 170, 20 }, "Face: None");
+        GuiLabel((Rectangle){ 30, 90, 170, 20 }, "UV: None");
+        GuiLabel((Rectangle){ 30, 110, 170, 20 }, "Texture: None");
     }
 
-    if (GuiButton((Rectangle){ 30, 100, 100, 20 }, "Reset"))
+    if (GuiButton((Rectangle){ 30, 140, 100, 20 }, "Reset"))
     {
         camera->azimuth = ArgFloat(argc, argv, "cameraAzimuth", 0.0f);
         camera->altitude = ArgFloat(argc, argv, "cameraAltitude", 0.4f);
@@ -285,21 +383,21 @@ void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterData, int argc,
     // so only show the track/skeleton UI when the active character has a skeleton.
     if (hasCharacter && jointCount > 0)
     {
-        GuiToggle((Rectangle){ 30, 130, 100, 20 }, "Track", &camera->track);
+        GuiToggle((Rectangle){ 30, 170, 100, 20 }, "Track", &camera->track);
         bool skeletonToggle = camera->showSkeletonPanel;
-        GuiToggle((Rectangle){ 30, 160, 100, 20 }, "Skeleton", &skeletonToggle);
+        GuiToggle((Rectangle){ 30, 200, 100, 20 }, "Skeleton", &skeletonToggle);
         int bsel = camera->selectedBone;
         if (bsel < 0) bsel = 0;
         if (bsel >= jointCount) bsel = jointCount - 1;
         char jointText[32];
         snprintf(jointText, sizeof(jointText), "%d/%d", bsel + 1, jointCount);
-        DrawText(jointText, 135, 165, 10, (Color){ 153, 153, 153, 255 });
+        DrawText(jointText, 135, 205, 10, (Color){ 153, 153, 153, 255 });
         if (camera->selectedBone >= 0 && camera->selectedBone < jointCount)
         {
             const char* boneName = characterData->isGLB[ci]
                 ? characterData->glbData[ci].model.skeleton.bones[characterData->glbData[ci].topoOrder[camera->selectedBone]].name
                 : characterData->bvhData[ci].joints[camera->selectedBone].name;
-            DrawText(boneName, 50, 190, 10, GOLD);
+            DrawText(boneName, 50, 230, 10, GOLD);
         }
         if (skeletonToggle != camera->showSkeletonPanel)
         {
