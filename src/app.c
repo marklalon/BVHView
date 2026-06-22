@@ -769,6 +769,7 @@ void ApplicationUpdate(void* voidApplicationState)
     PROFILE_BEGIN(Rendering);
     ClearBackground(app->renderSettings.backgroundColor);
     BeginMode3D(app->camera.cam3d);
+    rlDisableColorBlend();  // Disable alpha blending for screen-door transparency
 
     // Set shader uniforms
     Vector3 sunColorValue = { app->renderSettings.sunColor.r / 255.0f, app->renderSettings.sunColor.g / 255.0f, app->renderSettings.sunColor.b / 255.0f };
@@ -982,6 +983,13 @@ void ApplicationUpdate(void* voidApplicationState)
                 SetShaderValue(app->shader, app->uniforms.objectColor, &surfaceColor, SHADER_UNIFORM_VEC3);
                 SetShaderValue(app->shader, app->uniforms.objectOpacity, &surfaceOpacity, SHADER_UNIFORM_FLOAT);
 
+                // Promote opaque materials with user-lowered opacity to screen-door
+                if (surfaceOpacity < 1.0f && alphaMode == 0)
+                {
+                    alphaMode = 2;
+                    SetShaderValue(app->shader, app->uniforms.alphaMode, &alphaMode, SHADER_UNIFORM_INT);
+                }
+
                 // Screen-door (alphaMode 2) uses discard; no depth-mask hack needed
                 bool needsDepthMaskHack = (surfaceOpacity < 1.0f && alphaMode != 2);
                 bool disableCulling = info != NULL && info->doubleSided;
@@ -1114,6 +1122,7 @@ void ApplicationUpdate(void* voidApplicationState)
     }
 
     rlDrawRenderBatchActive();
+    rlEnableColorBlend();  // Re-enable alpha blending for 2D GUI
     rlEnableDepthTest();
     EndMode3D();
     PROFILE_END(Rendering);
