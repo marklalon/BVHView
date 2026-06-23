@@ -177,9 +177,9 @@ uniform int enableLighting;
 
 // PBR lighting adjustment coefficients
 const float PBR_EXPOSURE_ADJUSTMENT = 0.35;
-const float PBR_SUN_ADJUSTMENT = 1;
-const float PBR_INDIRECT_DIFFUSE_ADJUSTMENT = 0.5;
-const float PBR_INDIRECT_SPECULAR_ADJUSTMENT = 0.5;
+const float PBR_SUN_ADJUSTMENT = 5;
+const float PBR_INDIRECT_DIFFUSE_ADJUSTMENT = 0.2;
+const float PBR_INDIRECT_SPECULAR_ADJUSTMENT = 0.2;
 
 // Display-linear contrast look around 18% middle gray. Values above 1.0 are
 // intentionally left unclamped for the framebuffer conversion to handle.

@@ -785,11 +785,11 @@ void ApplicationUpdate(void* voidApplicationState)
     SetShaderValue(app->shader, app->uniforms.exposure, &app->renderSettings.exposure, SHADER_UNIFORM_FLOAT);
     int enableLighting = app->renderSettings.enableLighting;
     SetShaderValue(app->shader, app->uniforms.enableLighting, &enableLighting, SHADER_UNIFORM_INT);
-    // Legacy lighting uniforms (hardcoded original defaults, not exposed in UI)
+    // Legacy lighting uniforms (sunStrength and ambientStrength are now configurable via UI)
     SetShaderValue(app->shader, app->uniforms.sunDir, &lightDir, SHADER_UNIFORM_VEC3);
-    float sunStrengthVal = 0.25f;
+    float sunStrengthVal = app->renderSettings.sunStrength;
     float skyStrengthVal = 0.15f;
-    float ambientStrengthVal = 1.0f;
+    float ambientStrengthVal = app->renderSettings.ambientStrength;
     float groundStrengthVal = 0.1f;
     Vector3 sunColorVal = { 255.0f/255.0f, 255.0f/255.0f, 255.0f/255.0f };
     Vector3 skyColorVal = { 174.0f/255.0f, 183.0f/255.0f, 190.0f/255.0f };

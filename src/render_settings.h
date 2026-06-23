@@ -17,6 +17,8 @@ typedef struct RenderSettings {
     float lightConeAngle;
     float lightAzimuth;
     float lightAltitude;
+    float sunStrength;
+    float ambientStrength;
     float exposure;
     bool drawOrigin;
     bool drawGrid;

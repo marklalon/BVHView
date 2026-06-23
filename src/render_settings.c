@@ -15,6 +15,8 @@ void RenderSettingsInit(RenderSettings* settings, int argc, char** argv)
     settings->lightConeAngle = ArgFloat(argc, argv, "lightConeAngle", 0.2f);
     settings->lightAzimuth = ArgFloat(argc, argv, "lightAzimuth", PI / 4.0f);
     settings->lightAltitude = ArgFloat(argc, argv, "lightAltitude", 0.8f);
+    settings->sunStrength = ArgFloat(argc, argv, "sunStrength", 0.25f);
+    settings->ambientStrength = ArgFloat(argc, argv, "ambientStrength", 1.0f);
     settings->exposure = ArgFloat(argc, argv, "exposure", 0.9f);
     settings->drawOrigin = ArgBool(argc, argv, "drawOrigin", true);
     settings->drawGrid = ArgBool(argc, argv, "drawGrid", false);

@@ -233,7 +233,7 @@ void GuiCustomGroupBox(Rectangle bounds, const char* text)
 
 void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterData, RenderSettings* settings, CapsuleData* capsuleData, int argc, char** argv)
 {
-    GuiCustomGroupBox((Rectangle){ 20, 10, 190, 280 }, "Info");
+    GuiCustomGroupBox((Rectangle){ 20, 10, 190, 260 }, "Info");
 
     int ci = characterData->active;
     bool hasCharacter = characterData->count > 0 && ci >= 0 && ci < characterData->count;
@@ -380,6 +380,8 @@ void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterData, RenderSet
 
         // Reset lighting/render panel to defaults
         settings->exposure = ArgFloat(argc, argv, "exposure", 0.9f);
+        settings->sunStrength = ArgFloat(argc, argv, "sunStrength", 0.25f);
+        settings->ambientStrength = ArgFloat(argc, argv, "ambientStrength", 1.0f);
         settings->lightConeAngle = ArgFloat(argc, argv, "lightConeAngle", 0.2f);
         CapsuleDataUpdateShadowLookupTable(capsuleData, settings->lightConeAngle);
         settings->lightAzimuth = ArgFloat(argc, argv, "lightAzimuth", PI / 4.0f);
@@ -558,35 +560,35 @@ void GuiSkeletonPanel(OrbitCamera* camera, CharacterData* characterData, int scr
 
 void GuiRenderSettings(RenderSettings* settings, CapsuleData* capsuleData, bool bindPoseAvailable, int screenWidth, int screenHeight)
 {
-    GuiCustomGroupBox((Rectangle){ screenWidth - 270, 10, 250, 480 }, "Rendering");
+    GuiCustomGroupBox((Rectangle){ screenWidth - 270, 10, 250, 390 }, "Rendering");
     GuiSliderBar((Rectangle){ screenWidth - 170, 30, 100, 20 }, "Exposure", TextFormat("%5.2f", settings->exposure), &settings->exposure, 0.0f, 3.0f);
-    if (GuiSliderBar((Rectangle){ screenWidth - 170, 60, 100, 20 }, "Light Softness", TextFormat("%5.2f", settings->lightConeAngle), &settings->lightConeAngle, 0.02f, PI / 4.0f))
-        CapsuleDataUpdateShadowLookupTable(capsuleData, settings->lightConeAngle);
-    GuiSliderBar((Rectangle){ screenWidth - 170, 90, 100, 20 }, "Light Azimuth", TextFormat("%5.2f", settings->lightAzimuth), &settings->lightAzimuth, -PI, PI);
-    GuiSliderBar((Rectangle){ screenWidth - 170, 120, 100, 20 }, "Light Altitude", TextFormat("%5.2f", settings->lightAltitude), &settings->lightAltitude, 0.0f, 0.49f * PI);
-    GuiCheckBox((Rectangle){ screenWidth - 260, 270, 20, 20 }, "Draw Origin", &settings->drawOrigin);
-    GuiCheckBox((Rectangle){ screenWidth - 140, 270, 20, 20 }, "Draw Grid", &settings->drawGrid);
-    GuiCheckBox((Rectangle){ screenWidth - 260, 300, 20, 20 }, "Draw Checker", &settings->drawChecker);
-    if (GuiCheckBox((Rectangle){ screenWidth - 140, 300, 20, 20 }, "Draw Meshes", &settings->drawMeshes) && settings->drawMeshes)
+    GuiSliderBar((Rectangle){ screenWidth - 170, 60, 100, 20 }, "Sun Strength", TextFormat("%5.2f", settings->sunStrength), &settings->sunStrength, 0.0f, 1.0f);
+    GuiSliderBar((Rectangle){ screenWidth - 170, 90, 100, 20 }, "Sun Azimuth", TextFormat("%5.2f", settings->lightAzimuth), &settings->lightAzimuth, -PI, PI);
+    GuiSliderBar((Rectangle){ screenWidth - 170, 120, 100, 20 }, "Sun Altitude", TextFormat("%5.2f", settings->lightAltitude), &settings->lightAltitude, 0.0f, 0.49f * PI);
+    GuiSliderBar((Rectangle){ screenWidth - 170, 150, 100, 20 }, "Ambient Strength", TextFormat("%5.2f", settings->ambientStrength), &settings->ambientStrength, 0.0f, 2.0f);
+    GuiCheckBox((Rectangle){ screenWidth - 260, 180, 20, 20 }, "Draw Origin", &settings->drawOrigin);
+    GuiCheckBox((Rectangle){ screenWidth - 140, 180, 20, 20 }, "Draw Grid", &settings->drawGrid);
+    GuiCheckBox((Rectangle){ screenWidth - 260, 210, 20, 20 }, "Draw Checker", &settings->drawChecker);
+    if (GuiCheckBox((Rectangle){ screenWidth - 140, 210, 20, 20 }, "Draw Meshes", &settings->drawMeshes) && settings->drawMeshes)
         settings->drawCapsules = false;
-    GuiCheckBox((Rectangle){ screenWidth - 260, 330, 20, 20 }, "Draw Capsules", &settings->drawCapsules);
-    GuiCheckBox((Rectangle){ screenWidth - 140, 330, 20, 20 }, "Draw Wireframes", &settings->drawWireframes);
-    GuiCheckBox((Rectangle){ screenWidth - 260, 360, 20, 20 }, "Draw Skeleton", &settings->drawSkeleton);
-    GuiCheckBox((Rectangle){ screenWidth - 140, 360, 20, 20 }, "Draw Transforms", &settings->drawTransforms);
-    GuiCheckBox((Rectangle){ screenWidth - 260, 390, 20, 20 }, "Draw AO", &settings->drawAO);
-    GuiCheckBox((Rectangle){ screenWidth - 140, 390, 20, 20 }, "Enable Lighting", &settings->enableLighting);
-    GuiCheckBox((Rectangle){ screenWidth - 260, 420, 20, 20 }, "Draw PBR", &settings->drawPBR);
-    GuiCheckBox((Rectangle){ screenWidth - 140, 420, 20, 20 }, "Draw FPS", &settings->drawFPS);
-    GuiCheckBox((Rectangle){ screenWidth - 260, 450, 20, 20 }, "Draw Texture", &settings->drawTexture);
+    GuiCheckBox((Rectangle){ screenWidth - 260, 240, 20, 20 }, "Draw Capsules", &settings->drawCapsules);
+    GuiCheckBox((Rectangle){ screenWidth - 140, 240, 20, 20 }, "Draw Wireframes", &settings->drawWireframes);
+    GuiCheckBox((Rectangle){ screenWidth - 260, 270, 20, 20 }, "Draw Skeleton", &settings->drawSkeleton);
+    GuiCheckBox((Rectangle){ screenWidth - 140, 270, 20, 20 }, "Draw Transforms", &settings->drawTransforms);
+    GuiCheckBox((Rectangle){ screenWidth - 260, 300, 20, 20 }, "Draw AO", &settings->drawAO);
+    GuiCheckBox((Rectangle){ screenWidth - 140, 300, 20, 20 }, "Enable Lighting", &settings->enableLighting);
+    GuiCheckBox((Rectangle){ screenWidth - 260, 330, 20, 20 }, "Draw PBR", &settings->drawPBR);
+    GuiCheckBox((Rectangle){ screenWidth - 140, 330, 20, 20 }, "Draw FPS", &settings->drawFPS);
+    GuiCheckBox((Rectangle){ screenWidth - 260, 360, 20, 20 }, "Draw Texture", &settings->drawTexture);
     // Bind/rest pose only exists for GLB; BVH has no separately-stored bind pose, so disable it there
     if (!bindPoseAvailable) GuiDisable();
-    GuiCheckBox((Rectangle){ screenWidth - 140, 450, 20, 20 }, "Bind Pose", &settings->drawBindPose);
+    GuiCheckBox((Rectangle){ screenWidth - 140, 360, 20, 20 }, "Bind Pose", &settings->drawBindPose);
     if (!bindPoseAvailable) GuiEnable();
 }
 
 void GuiCharacterData(CharacterData* characterData, GuiWindowFileDialogState* fileDialogState, ScrubberSettings* scrubberSettings, char* errMsg, int argc, char** argv)
 {
-    int offsetHeight = 260;
+    int offsetHeight = 280;
     GuiCustomGroupBox((Rectangle){ 20, offsetHeight, 190, (CHARACTERS_MAX - 1) * 30 + 190 }, "Characters");
 #if !defined(PLATFORM_WEB)
     if (GuiButton((Rectangle){ 30, offsetHeight + 20, 110, 20 }, "Open"))
