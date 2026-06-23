@@ -48,6 +48,7 @@ typedef struct ApplicationState {
     OrbitCamera camera;
     Shader shader;
     ShaderUniforms uniforms;
+    TextureCubemap studioLight;
     Mesh groundPlaneMesh;
     Model groundPlaneModel;
     Model capsuleModel;

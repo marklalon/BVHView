@@ -791,7 +791,7 @@ void ApplicationUpdate(void* voidApplicationState)
     float skyStrengthVal = 0.15f;
     float ambientStrengthVal = 1.0f;
     float groundStrengthVal = 0.1f;
-    Vector3 sunColorVal = { 253.0f/255.0f, 255.0f/255.0f, 232.0f/255.0f };
+    Vector3 sunColorVal = { 255.0f/255.0f, 255.0f/255.0f, 255.0f/255.0f };
     Vector3 skyColorVal = { 174.0f/255.0f, 183.0f/255.0f, 190.0f/255.0f };
     SetShaderValue(app->shader, app->uniforms.sunStrength, &sunStrengthVal, SHADER_UNIFORM_FLOAT);
     SetShaderValue(app->shader, app->uniforms.sunColor, &sunColorVal, SHADER_UNIFORM_VEC3);
@@ -806,21 +806,26 @@ void ApplicationUpdate(void* voidApplicationState)
     SetShaderValue(app->shader, app->uniforms.usePBR, &usePBR, SHADER_UNIFORM_INT);
     SetShaderValue(app->shader, app->uniforms.aoLookupResolution, &app->capsuleData.aoLookupResolution, SHADER_UNIFORM_VEC2);
     SetShaderValue(app->shader, app->uniforms.shadowLookupResolution, &app->capsuleData.shadowLookupResolution, SHADER_UNIFORM_VEC2);
-    // Core PBR maps occupy slots 0..5. Keep lookup textures on fixed slots so
-    // DrawMesh() cannot overwrite or unbind them.
+    // Core PBR maps occupy slots 0..5. Keep lookup and environment textures on
+    // fixed slots so DrawMesh() cannot overwrite or unbind them.
     int aoLookupSlot = 6;
     int shadowLookupSlot = 7;
+    int environmentSlot = 8;
     rlActiveTextureSlot(aoLookupSlot);
     rlEnableTexture(app->capsuleData.aoLookupTable.id);
     rlActiveTextureSlot(shadowLookupSlot);
     rlEnableTexture(app->capsuleData.shadowLookupTable.id);
+    if (app->studioLight.id != 0)
+    {
+        rlActiveTextureSlot(environmentSlot);
+        rlEnableTextureCubemap(app->studioLight.id);
+    }
     rlActiveTextureSlot(0);
     SetShaderValue(app->shader, app->uniforms.aoLookupTable, &aoLookupSlot, SHADER_UNIFORM_INT);
     SetShaderValue(app->shader, app->uniforms.shadowLookupTable, &shadowLookupSlot, SHADER_UNIFORM_INT);
-    // Studio environment lighting is now an order-2 SH (9 RGB coeffs) instead of
-    // textures - upload the whole coefficient array as a vec3 uniform.
-    SetShaderValueV(app->shader, app->uniforms.environmentSH,
-        studio_sh_coeffs, SHADER_UNIFORM_VEC3, studio_sh_count);
+    SetShaderValue(app->shader, app->uniforms.environmentMap, &environmentSlot, SHADER_UNIFORM_INT);
+    float environmentMaxLod = app->studioLight.mipmaps > 0 ? (float)(app->studioLight.mipmaps - 1) : 0.0f;
+    SetShaderValue(app->shader, app->uniforms.environmentMaxLod, &environmentMaxLod, SHADER_UNIFORM_FLOAT);
 
     // Draw Ground — diffuse checker with AO/shadow occlusion, no IBL tint
     PROFILE_BEGIN(RenderingGround);
@@ -1102,6 +1107,11 @@ void ApplicationUpdate(void* voidApplicationState)
     rlDisableTexture();
     rlActiveTextureSlot(shadowLookupSlot);
     rlDisableTexture();
+    if (app->studioLight.id != 0)
+    {
+        rlActiveTextureSlot(environmentSlot);
+        rlDisableTextureCubemap();
+    }
     rlActiveTextureSlot(0);
 
     if (app->renderSettings.drawGrid) DrawGrid(20, 1.0f);

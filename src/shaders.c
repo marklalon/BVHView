@@ -134,10 +134,9 @@ uniform int metallicRoughnessUV;
 uniform int normalUV;
 uniform int occlusionUV;
 uniform int emissionUV;
-// Order-2 spherical-harmonic encoding of the studio HDRI (9 RGB coeffs, linear).
-// Replaces the equirect environment/irradiance textures: no pole distortion and
-// no sampling cost, at the price of only low-frequency (blurry) reflections.
-uniform vec3 environmentSH[9];
+// GGX-prefiltered HDR cubemap. Mip N was baked at roughness N/maxLod.
+uniform samplerCube environmentMap;
+uniform float environmentMaxLod;
 
 uniform int alphaMode;
 uniform float alphaCutoff;
@@ -177,10 +176,14 @@ uniform float exposure;
 uniform int enableLighting;
 
 // PBR lighting adjustment coefficients
-const float PBR_EXPOSURE_ADJUSTMENT = 1;
-const float PBR_SUN_ADJUSTMENT = 1.0;
-const float PBR_INDIRECT_DIFFUSE_ADJUSTMENT = 0.2;
-const float PBR_INDIRECT_SPECULAR_ADJUSTMENT = 0.2;
+const float PBR_EXPOSURE_ADJUSTMENT = 0.35;
+const float PBR_SUN_ADJUSTMENT = 1;
+const float PBR_INDIRECT_DIFFUSE_ADJUSTMENT = 0.5;
+const float PBR_INDIRECT_SPECULAR_ADJUSTMENT = 0.5;
+
+// Display-linear contrast look around 18% middle gray. Values above 1.0 are
+// intentionally left unclamped for the framebuffer conversion to handle.
+const float AGX_LOOK_CONTRAST = 1.05;
 
 out vec4 finalColor;
 
@@ -220,15 +223,21 @@ vec3 AgXContrastApprox(in vec3 x)
         6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232;
 }
 
+vec3 AgXContrastLook(in vec3 color)
+{
+    const vec3 pivot = vec3(0.18);
+    return max(pivot + AGX_LOOK_CONTRAST * (color - pivot), vec3(0.0));
+}
+
 // Compact shader approximation of Blender's default AgX Base view transform.
 // Input and output are linear Rec. 709; the final sRGB display encoding
 // (LinearToSRGB) is applied by the caller, so no pow(2.2) here.
 vec3 AgXToneMapping(in vec3 color)
 {
     color = vec3(
-        dot(color, vec3(0.8424790623, 0.0423282423, 0.0423756549)),
-        dot(color, vec3(0.0784336000, 0.8784686365, 0.0784336000)),
-        dot(color, vec3(0.0792237451, 0.0791661275, 0.8791429738)));
+        dot(color, vec3(0.8424790623, 0.0784336000, 0.0792237451)),
+        dot(color, vec3(0.0423282423, 0.8784686365, 0.0791661275)),
+        dot(color, vec3(0.0423756549, 0.0784336000, 0.8791429738)));
 
     const float minEV = -12.47393;
     const float maxEV = 4.026069;
@@ -236,10 +245,10 @@ vec3 AgXToneMapping(in vec3 color)
     color = AgXContrastApprox(color);
 
     color = vec3(
-        dot(color, vec3(1.1968790051, -0.0528968518, -0.0529716355)),
-        dot(color, vec3(-0.0980208811, 1.1519031299, -0.0980434501)),
-        dot(color, vec3(-0.0990297441, -0.0989611768, 1.1510736726)));
-    return max(color, vec3(0.0));
+        dot(color, vec3(1.1968790051, -0.0980208811, -0.0990297441)),
+        dot(color, vec3(-0.0528968518, 1.1519031299, -0.0989611768)),
+        dot(color, vec3(-0.0529716355, -0.0980434501, 1.1510736726)));
+    return AgXContrastLook(color);
 }
 
 float Saturate(in float x)
@@ -308,59 +317,17 @@ vec3 EnvironmentBRDF(in vec3 f0, in float nDotV, in float roughness)
     return max(f0 * ab.x + ab.y, vec3(0.0));
 }
 
-// Order-2 real SH basis, evaluated per band so callers can weight bands
-// independently. Index order matches the baker (tools/bake_studio_light.py):
-// [Y00, Y1-1(y), Y10(z), Y11(x), Y2-2(xy), Y2-1(yz), Y20(3z^2-1), Y21(xz), Y22].
-float ShBasis[9];
-void ShEvalBasis(in vec3 d)
-{
-    d = normalize(d);
-    ShBasis[0] = 0.282095;
-    ShBasis[1] = 0.488603 * d.y;
-    ShBasis[2] = 0.488603 * d.z;
-    ShBasis[3] = 0.488603 * d.x;
-    ShBasis[4] = 1.092548 * d.x * d.y;
-    ShBasis[5] = 1.092548 * d.y * d.z;
-    ShBasis[6] = 0.315392 * (3.0 * d.z * d.z - 1.0);
-    ShBasis[7] = 1.092548 * d.x * d.z;
-    ShBasis[8] = 0.546274 * (d.x * d.x - d.y * d.y);
-}
-
-// Diffuse irradiance E(n)/PI via the Ramamoorthi/Hanrahan cosine-lobe
-// convolution: band l is scaled by A_l/PI = {1, 2/3, 1/4}. Returns E/PI so the
-// caller multiplies by albedo directly (matching the old irradiance map).
+// The roughest prefiltered level is a low-frequency, positive environment
+// estimate suitable for diffuse fill without reintroducing an SH approximation.
 vec3 EnvironmentDiffuseIrradiance(in vec3 normal)
 {
-    ShEvalBasis(normal);
-    const float a0 = 1.0;
-    const float a1 = 2.0 / 3.0;
-    const float a2 = 1.0 / 4.0;
-    vec3 r = a0 * environmentSH[0] * ShBasis[0];
-    r += a1 * (environmentSH[1] * ShBasis[1] + environmentSH[2] * ShBasis[2] +
-               environmentSH[3] * ShBasis[3]);
-    r += a2 * (environmentSH[4] * ShBasis[4] + environmentSH[5] * ShBasis[5] +
-               environmentSH[6] * ShBasis[6] + environmentSH[7] * ShBasis[7] +
-               environmentSH[8] * ShBasis[8]);
-    return max(r, vec3(0.0));
+    return textureLod(environmentMap, normalize(normal), environmentMaxLod).rgb;
 }
 
-// Low-frequency specular radiance: reconstruct the SH radiance along the
-// reflection direction, attenuating higher bands with roughness so smooth
-// surfaces keep more directional structure and rough ones blur toward the DC
-// term. Order-2 SH cannot express sharp mirror reflections by design.
 vec3 EnvironmentRadiance(in vec3 direction, in float perceptualRoughness)
 {
-    ShEvalBasis(direction);
-    float r2 = Square(clamp(perceptualRoughness, 0.0, 1.0));
-    float w1 = exp(-2.0 * r2);   // band 1 falloff
-    float w2 = exp(-6.0 * r2);   // band 2 falloff (l(l+1) spacing)
-    vec3 c = environmentSH[0] * ShBasis[0];
-    c += w1 * (environmentSH[1] * ShBasis[1] + environmentSH[2] * ShBasis[2] +
-               environmentSH[3] * ShBasis[3]);
-    c += w2 * (environmentSH[4] * ShBasis[4] + environmentSH[5] * ShBasis[5] +
-               environmentSH[6] * ShBasis[6] + environmentSH[7] * ShBasis[7] +
-               environmentSH[8] * ShBasis[8]);
-    return max(c, vec3(0.0));
+    float lod = clamp(perceptualRoughness, 0.0, 1.0) * environmentMaxLod;
+    return textureLod(environmentMap, normalize(direction), lod).rgb;
 }
 
 float FastAcos(in float x)
@@ -572,7 +539,7 @@ void main()
         float nDotV = max(dot(nor, viewDir), 0.0);
         float nDotL = max(dot(nor, lightDir), 0.0);
 
-        vec3 f0 = mix(vec3(0.04), albedo, metallic);
+        vec3 f0 = mix(vec3(0.01), albedo, metallic); // 0.04->0.01 make dark more pure
         vec3 fresnel = FresnelSchlick(max(dot(halfway, viewDir), 0.0), f0);
         float distribution = DistributionGGX(nor, halfway, roughness);
         float visibility = VisibilitySmithGGXCorrelated(nDotV, nDotL, roughness);
@@ -734,7 +701,8 @@ void ShaderUniformsInit(ShaderUniforms* uniforms, Shader shader)
     uniforms->normalUV = GetShaderLocation(shader, "normalUV");
     uniforms->occlusionUV = GetShaderLocation(shader, "occlusionUV");
     uniforms->emissionUV = GetShaderLocation(shader, "emissionUV");
-    uniforms->environmentSH = GetShaderLocation(shader, "environmentSH");
+    uniforms->environmentMap = GetShaderLocation(shader, "environmentMap");
+    uniforms->environmentMaxLod = GetShaderLocation(shader, "environmentMaxLod");
 
     // DrawMesh() binds material maps through this location table.
     shader.locs[SHADER_LOC_MAP_METALNESS] = GetShaderLocation(shader, "texture1");

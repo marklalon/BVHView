@@ -73,7 +73,8 @@ typedef struct ShaderUniforms
     int normalUV;
     int occlusionUV;
     int emissionUV;
-    int environmentSH;
+    int environmentMap;
+    int environmentMaxLod;
 
     int exposure;
     int enableLighting;
