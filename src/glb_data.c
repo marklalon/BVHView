@@ -828,9 +828,12 @@ bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSi
 
                 GLBDataReplaceMaterialTexture(target, MATERIAL_MAP_ALBEDO,
                     GLBDataLoadTextureView(filename, &pbr->base_color_texture, -1));
-                // glTF packs roughness in G, metallic in B — load full RGBA so the
-                // shader can read both channels from a single texture (texture1).
+                // glTF packs metallic in B, roughness in G of one texture.
+                // The shader reads metallic from texture1.r and roughness from texture3.r,
+                // so load the same combined texture into both slots.
                 GLBDataReplaceMaterialTexture(target, MATERIAL_MAP_METALNESS,
+                    GLBDataLoadTextureView(filename, &pbr->metallic_roughness_texture, -1));
+                GLBDataReplaceMaterialTexture(target, MATERIAL_MAP_ROUGHNESS,
                     GLBDataLoadTextureView(filename, &pbr->metallic_roughness_texture, -1));
                 GLBDataReplaceMaterialTexture(target, MATERIAL_MAP_NORMAL,
                     GLBDataLoadTextureView(filename, &source->normal_texture, -1));

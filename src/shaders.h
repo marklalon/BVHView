@@ -49,9 +49,18 @@ typedef struct ShaderUniforms
     int alphaMode;
     int alphaCutoff;
 
+    int sunStrength;
+    int sunDir;
+    int sunColor;
+    int skyStrength;
+    int skyColor;
+    int ambientStrength;
+    int groundStrength;
+
     int usePBR;
     int useMetalnessTexture;
     int useNormalTexture;
+    int useRoughnessTexture;
     int useOcclusionTexture;
     int useEmissionTexture;
     int metallicFactor;
@@ -64,17 +73,7 @@ typedef struct ShaderUniforms
     int normalUV;
     int occlusionUV;
     int emissionUV;
-    int environmentMap;
-    int useEnvironmentMap;
-    int environmentMaxLod;
-
-    int sunStrength;
-    int sunDir;
-    int sunColor;
-    int skyStrength;
-    int skyColor;
-    int ambientStrength;
-    int groundStrength;
+    int environmentSH;
 
     int exposure;
     int enableLighting;

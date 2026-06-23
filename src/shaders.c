@@ -113,6 +113,7 @@ uniform float objectOpacity;
 uniform sampler2D texture0;
 uniform sampler2D texture1;
 uniform sampler2D texture2;
+uniform sampler2D texture3;
 uniform sampler2D texture4;
 uniform sampler2D texture5;
 uniform int useTexture;
@@ -120,6 +121,7 @@ uniform int useTexture;
 uniform int usePBR;
 uniform int useMetalnessTexture;
 uniform int useNormalTexture;
+uniform int useRoughnessTexture;
 uniform int useOcclusionTexture;
 uniform int useEmissionTexture;
 uniform float metallicFactor;
@@ -132,9 +134,10 @@ uniform int metallicRoughnessUV;
 uniform int normalUV;
 uniform int occlusionUV;
 uniform int emissionUV;
-uniform sampler2D environmentMap;
-uniform int useEnvironmentMap;
-uniform float environmentMaxLod;
+// Order-2 spherical-harmonic encoding of the studio HDRI (9 RGB coeffs, linear).
+// Replaces the equirect environment/irradiance textures: no pole distortion and
+// no sampling cost, at the price of only low-frequency (blurry) reflections.
+uniform vec3 environmentSH[9];
 
 uniform int alphaMode;
 uniform float alphaCutoff;
@@ -174,11 +177,10 @@ uniform float exposure;
 uniform int enableLighting;
 
 // PBR lighting adjustment coefficients
-const float PBR_EXPOSURE_ADJUSTMENT = 1.875;
-const float PBR_SUN_ADJUSTMENT = 4.0;
-const float PBR_SKY_ADJUSTMENT = 6.0;
-const float PBR_AMBIENT_ADJUSTMENT = 0.02;
-const float PBR_GROUND_ADJUSTMENT = 6.0;
+const float PBR_EXPOSURE_ADJUSTMENT = 1;
+const float PBR_SUN_ADJUSTMENT = 1.0;
+const float PBR_INDIRECT_DIFFUSE_ADJUSTMENT = 0.2;
+const float PBR_INDIRECT_SPECULAR_ADJUSTMENT = 0.2;
 
 out vec4 finalColor;
 
@@ -219,7 +221,8 @@ vec3 AgXContrastApprox(in vec3 x)
 }
 
 // Compact shader approximation of Blender's default AgX Base view transform.
-// Input and output are linear Rec. 709; the final display encoding happens below.
+// Input and output are linear Rec. 709; the final sRGB display encoding
+// (LinearToSRGB) is applied by the caller, so no pow(2.2) here.
 vec3 AgXToneMapping(in vec3 color)
 {
     color = vec3(
@@ -236,7 +239,7 @@ vec3 AgXToneMapping(in vec3 color)
         dot(color, vec3(1.1968790051, -0.0528968518, -0.0529716355)),
         dot(color, vec3(-0.0980208811, 1.1519031299, -0.0980434501)),
         dot(color, vec3(-0.0990297441, -0.0989611768, 1.1510736726)));
-    return pow(max(color, vec3(0.0)), vec3(2.2));
+    return max(color, vec3(0.0));
 }
 
 float Saturate(in float x)
@@ -305,33 +308,59 @@ vec3 EnvironmentBRDF(in vec3 f0, in float nDotV, in float roughness)
     return max(f0 * ab.x + ab.y, vec3(0.0));
 }
 
-vec2 EnvironmentUV(in vec3 direction)
+// Order-2 real SH basis, evaluated per band so callers can weight bands
+// independently. Index order matches the baker (tools/bake_studio_light.py):
+// [Y00, Y1-1(y), Y10(z), Y11(x), Y2-2(xy), Y2-1(yz), Y20(3z^2-1), Y21(xz), Y22].
+float ShBasis[9];
+void ShEvalBasis(in vec3 d)
 {
-    direction = normalize(direction);
-    return vec2(fract(atan(direction.z, direction.x) / (2.0 * PI) + 0.5),
-        acos(clamp(direction.y, -1.0, 1.0)) / PI);
+    d = normalize(d);
+    ShBasis[0] = 0.282095;
+    ShBasis[1] = 0.488603 * d.y;
+    ShBasis[2] = 0.488603 * d.z;
+    ShBasis[3] = 0.488603 * d.x;
+    ShBasis[4] = 1.092548 * d.x * d.y;
+    ShBasis[5] = 1.092548 * d.y * d.z;
+    ShBasis[6] = 0.315392 * (3.0 * d.z * d.z - 1.0);
+    ShBasis[7] = 1.092548 * d.x * d.z;
+    ShBasis[8] = 0.546274 * (d.x * d.x - d.y * d.y);
 }
 
-vec3 EnvironmentRadiance(in vec3 direction, in float perceptualRoughness)
-{
-    float lod = clamp(perceptualRoughness, 0.0, 1.0) * environmentMaxLod;
-    return textureLod(environmentMap, EnvironmentUV(direction), lod).rgb;
-}
-
+// Diffuse irradiance E(n)/PI via the Ramamoorthi/Hanrahan cosine-lobe
+// convolution: band l is scaled by A_l/PI = {1, 2/3, 1/4}. Returns E/PI so the
+// caller multiplies by albedo directly (matching the old irradiance map).
 vec3 EnvironmentDiffuseIrradiance(in vec3 normal)
 {
-    // A few high-mip samples approximate Blender's cosine-convolved irradiance
-    // while keeping this single-pass viewer inexpensive.
-    vec3 axis = abs(normal.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
-    vec3 tangent = normalize(cross(axis, normal));
-    vec3 bitangent = cross(normal, tangent);
-    float lod = min(environmentMaxLod, 5.0);
-    vec3 result = textureLod(environmentMap, EnvironmentUV(normal), lod).rgb * 0.4;
-    result += textureLod(environmentMap, EnvironmentUV(normalize(normal + 0.85 * tangent)), lod).rgb * 0.15;
-    result += textureLod(environmentMap, EnvironmentUV(normalize(normal - 0.85 * tangent)), lod).rgb * 0.15;
-    result += textureLod(environmentMap, EnvironmentUV(normalize(normal + 0.85 * bitangent)), lod).rgb * 0.15;
-    result += textureLod(environmentMap, EnvironmentUV(normalize(normal - 0.85 * bitangent)), lod).rgb * 0.15;
-    return result;
+    ShEvalBasis(normal);
+    const float a0 = 1.0;
+    const float a1 = 2.0 / 3.0;
+    const float a2 = 1.0 / 4.0;
+    vec3 r = a0 * environmentSH[0] * ShBasis[0];
+    r += a1 * (environmentSH[1] * ShBasis[1] + environmentSH[2] * ShBasis[2] +
+               environmentSH[3] * ShBasis[3]);
+    r += a2 * (environmentSH[4] * ShBasis[4] + environmentSH[5] * ShBasis[5] +
+               environmentSH[6] * ShBasis[6] + environmentSH[7] * ShBasis[7] +
+               environmentSH[8] * ShBasis[8]);
+    return max(r, vec3(0.0));
+}
+
+// Low-frequency specular radiance: reconstruct the SH radiance along the
+// reflection direction, attenuating higher bands with roughness so smooth
+// surfaces keep more directional structure and rough ones blur toward the DC
+// term. Order-2 SH cannot express sharp mirror reflections by design.
+vec3 EnvironmentRadiance(in vec3 direction, in float perceptualRoughness)
+{
+    ShEvalBasis(direction);
+    float r2 = Square(clamp(perceptualRoughness, 0.0, 1.0));
+    float w1 = exp(-2.0 * r2);   // band 1 falloff
+    float w2 = exp(-6.0 * r2);   // band 2 falloff (l(l+1) spacing)
+    vec3 c = environmentSH[0] * ShBasis[0];
+    c += w1 * (environmentSH[1] * ShBasis[1] + environmentSH[2] * ShBasis[2] +
+               environmentSH[3] * ShBasis[3]);
+    c += w2 * (environmentSH[4] * ShBasis[4] + environmentSH[5] * ShBasis[5] +
+               environmentSH[6] * ShBasis[6] + environmentSH[7] * ShBasis[7] +
+               environmentSH[8] * ShBasis[8]);
+    return max(c, vec3(0.0));
 }
 
 float FastAcos(in float x)
@@ -489,6 +518,8 @@ void main()
     if (usePBR == 1 && useNormalTexture == 1)
         nor = NormalFromMap(pos, nor, MaterialUV(normalUV), normalScale);
 
+    vec3 lightDir = normalize(-sunDir);
+
     float sunShadow = 1.0;
     for (int i = 0; i < shadowCapsuleCount; i++)
     {
@@ -497,7 +528,7 @@ void main()
             shadowCapsuleStarts[i],
             shadowCapsuleVectors[i],
             shadowCapsuleRadii[i],
-            sunDir));
+            lightDir));
     }
     
     float ambShadow = 1.0;
@@ -523,11 +554,8 @@ void main()
         vec2 mrUVs = MaterialUV(metallicRoughnessUV);
         float metallic = metallicFactor;
         float roughness = roughnessFactor;
-        if (useMetalnessTexture == 1) {
-            vec4 mrSample = texture(texture1, mrUVs);
-            roughness *= mrSample.g;
-            metallic *= mrSample.b;
-        }
+        if (useMetalnessTexture == 1) metallic *= texture(texture1, mrUVs).b;
+        if (useRoughnessTexture == 1) roughness *= texture(texture3, mrUVs).g;
         metallic = Saturate(metallic);
         roughness = clamp(roughness, 0.045, 1.0);
 
@@ -540,7 +568,6 @@ void main()
             emission *= SRGBToLinear(texture(texture5, MaterialUV(emissionUV)).rgb);
 
         vec3 viewDir = normalize(cameraPosition - pos);
-        vec3 lightDir = normalize(-sunDir);
         vec3 halfway = normalize(viewDir + lightDir);
         float nDotV = max(dot(nor, viewDir), 0.0);
         float nDotL = max(dot(nor, lightDir), 0.0);
@@ -558,37 +585,18 @@ void main()
         vec3 direct = sunShadow * (PI * sunStrength * PBR_SUN_ADJUSTMENT) * lightSunColor *
             (diffuseBRDF + specularBRDF) * nDotL;
 
-        vec3 lightSkyColor = SRGBToLinear(skyColor);
-        float skyDiffuse = max(nor.y, 0.0);
-        float groundDiffuse = max(-nor.y, 0.0);
-        vec3 diffuseLighting = vec3(0.0);
-        if (useEnvironmentMap == 1)
-            diffuseLighting = ambientStrength * PBR_AMBIENT_ADJUSTMENT * EnvironmentDiffuseIrradiance(nor);
-        else
-            diffuseLighting = (ambientStrength * PBR_AMBIENT_ADJUSTMENT) * lightSkyColor;
-        diffuseLighting += lightSkyColor *
-            (skyStrength * PBR_SKY_ADJUSTMENT * skyDiffuse + groundStrength * PBR_GROUND_ADJUSTMENT * groundDiffuse);
+        vec3 diffuseLighting = (ambientStrength * PBR_INDIRECT_DIFFUSE_ADJUSTMENT) * EnvironmentDiffuseIrradiance(nor);
         vec3 indirectDiffuse = albedo * (1.0 - metallic) * diffuseLighting;
 
         vec3 reflectionDir = reflect(-viewDir, nor);
-        // Sample the Blender studio environment by reflection direction; the
-        // sky/ground approximation remains as a fallback and optional fill.
-        float filteredReflectionY = mix(reflectionDir.y, nor.y, roughness * roughness);
-        float reflectionSky = Saturate(filteredReflectionY * 0.5 + 0.5);
-        vec3 reflectionColor = vec3(0.0);
-        if (useEnvironmentMap == 1)
-            reflectionColor = ambientStrength * PBR_AMBIENT_ADJUSTMENT * EnvironmentRadiance(reflectionDir, roughness);
-        else
-            reflectionColor = (ambientStrength * PBR_AMBIENT_ADJUSTMENT) * lightSkyColor * mix(0.35, 1.0, reflectionSky);
-        reflectionColor += lightSkyColor * mix(0.35, 1.0, reflectionSky) *
-            mix(groundStrength * PBR_GROUND_ADJUSTMENT, skyStrength * PBR_SKY_ADJUSTMENT, reflectionSky);
+        vec3 reflectionColor = (ambientStrength * PBR_INDIRECT_SPECULAR_ADJUSTMENT) * EnvironmentRadiance(reflectionDir, roughness);
         vec3 indirectSpecular = EnvironmentBRDF(f0, nDotV, roughness) *
             reflectionColor;
 
         if (enableLighting == 0)
             final = albedo;
         else
-            final = direct + ambShadow * materialAO * (indirectDiffuse + indirectSpecular) + emission;
+            final = direct + materialAO * (ambShadow * indirectDiffuse + indirectSpecular) + emission;
     }
     else
     {
@@ -648,20 +656,22 @@ void main()
         if (texAlpha <= bayer8[pixel.y * 8 + pixel.x]) discard;
     }
 
-    if (enableLighting == 0)
+    if (usePBR == 1)
     {
-        vec3 raw = max(final, vec3(0.0));
-        if (usePBR == 1)
-            finalColor = vec4(LinearToSRGB(raw), objectOpacity);
-        else
-            finalColor = vec4(LegacyToGamma(raw), objectOpacity);
-    }
-    else if (usePBR == 1)
-    {
-        vec3 displayLinear = AgXToneMapping(max((exposure * PBR_EXPOSURE_ADJUSTMENT) * final, vec3(0.0)));
+        // Skip tone mapping and exposure when lighting is disabled.
+        vec3 displayLinear = enableLighting == 0
+            ? max(final, vec3(0.0))
+            : AgXToneMapping(max((exposure * PBR_EXPOSURE_ADJUSTMENT) * final, vec3(0.0)));
         finalColor = vec4(LinearToSRGB(displayLinear), objectOpacity);
     }
-    else finalColor = vec4(LegacyToGamma(exposure * final), objectOpacity);
+    else
+    {
+        // Skip exposure when lighting is disabled (albedo is already LDR).
+        vec3 displayLinear = enableLighting == 0
+            ? max(final, vec3(0.0))
+            : max(exposure * final, vec3(0.0));
+        finalColor = vec4(LegacyToGamma(displayLinear), objectOpacity);
+    }
 }
 
 );
@@ -700,9 +710,18 @@ void ShaderUniformsInit(ShaderUniforms* uniforms, Shader shader)
     uniforms->alphaMode = GetShaderLocation(shader, "alphaMode");
     uniforms->alphaCutoff = GetShaderLocation(shader, "alphaCutoff");
 
+    uniforms->sunStrength = GetShaderLocation(shader, "sunStrength");
+    uniforms->sunDir = GetShaderLocation(shader, "sunDir");
+    uniforms->sunColor = GetShaderLocation(shader, "sunColor");
+    uniforms->skyStrength = GetShaderLocation(shader, "skyStrength");
+    uniforms->skyColor = GetShaderLocation(shader, "skyColor");
+    uniforms->ambientStrength = GetShaderLocation(shader, "ambientStrength");
+    uniforms->groundStrength = GetShaderLocation(shader, "groundStrength");
+
     uniforms->usePBR = GetShaderLocation(shader, "usePBR");
     uniforms->useMetalnessTexture = GetShaderLocation(shader, "useMetalnessTexture");
     uniforms->useNormalTexture = GetShaderLocation(shader, "useNormalTexture");
+    uniforms->useRoughnessTexture = GetShaderLocation(shader, "useRoughnessTexture");
     uniforms->useOcclusionTexture = GetShaderLocation(shader, "useOcclusionTexture");
     uniforms->useEmissionTexture = GetShaderLocation(shader, "useEmissionTexture");
     uniforms->metallicFactor = GetShaderLocation(shader, "metallicFactor");
@@ -715,23 +734,14 @@ void ShaderUniformsInit(ShaderUniforms* uniforms, Shader shader)
     uniforms->normalUV = GetShaderLocation(shader, "normalUV");
     uniforms->occlusionUV = GetShaderLocation(shader, "occlusionUV");
     uniforms->emissionUV = GetShaderLocation(shader, "emissionUV");
-    uniforms->environmentMap = GetShaderLocation(shader, "environmentMap");
-    uniforms->useEnvironmentMap = GetShaderLocation(shader, "useEnvironmentMap");
-    uniforms->environmentMaxLod = GetShaderLocation(shader, "environmentMaxLod");
+    uniforms->environmentSH = GetShaderLocation(shader, "environmentSH");
 
     // DrawMesh() binds material maps through this location table.
     shader.locs[SHADER_LOC_MAP_METALNESS] = GetShaderLocation(shader, "texture1");
     shader.locs[SHADER_LOC_MAP_NORMAL] = GetShaderLocation(shader, "texture2");
+    shader.locs[SHADER_LOC_MAP_ROUGHNESS] = GetShaderLocation(shader, "texture3");
     shader.locs[SHADER_LOC_MAP_OCCLUSION] = GetShaderLocation(shader, "texture4");
     shader.locs[SHADER_LOC_MAP_EMISSION] = GetShaderLocation(shader, "texture5");
-
-    uniforms->sunStrength = GetShaderLocation(shader, "sunStrength");
-    uniforms->sunDir = GetShaderLocation(shader, "sunDir");
-    uniforms->sunColor = GetShaderLocation(shader, "sunColor");
-    uniforms->skyStrength = GetShaderLocation(shader, "skyStrength");
-    uniforms->skyColor = GetShaderLocation(shader, "skyColor");
-    uniforms->ambientStrength = GetShaderLocation(shader, "ambientStrength");
-    uniforms->groundStrength = GetShaderLocation(shader, "groundStrength");
 
     uniforms->exposure = GetShaderLocation(shader, "exposure");
     uniforms->enableLighting = GetShaderLocation(shader, "enableLighting");

@@ -14,15 +14,9 @@
 
 typedef struct RenderSettings {
     Color backgroundColor;
-    float sunLightConeAngle;
-    float sunLightStrength;
-    float sunAzimuth;
-    float sunAltitude;
-    Color sunColor;
-    float skyLightStrength;
-    Color skyColor;
-    float groundLightStrength;
-    float ambientLightStrength;
+    float lightConeAngle;
+    float lightAzimuth;
+    float lightAltitude;
     float exposure;
     bool drawOrigin;
     bool drawGrid;

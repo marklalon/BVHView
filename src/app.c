@@ -12,6 +12,7 @@
 #include "rcamera.h"
 #include "rlgl.h"
 #include "app.h"
+#include "studio_light.h"
 #include "gui.h"
 #include "drawing.h"
 #include "geometry.h"
@@ -774,25 +775,30 @@ void ApplicationUpdate(void* voidApplicationState)
     rlDisableColorBlend();  // Disable alpha blending for screen-door transparency
 
     // Set shader uniforms
-    Vector3 sunColorValue = { app->renderSettings.sunColor.r / 255.0f, app->renderSettings.sunColor.g / 255.0f, app->renderSettings.sunColor.b / 255.0f };
-    Vector3 skyColorValue = { app->renderSettings.skyColor.r / 255.0f, app->renderSettings.skyColor.g / 255.0f, app->renderSettings.skyColor.b / 255.0f };
     float objectSpecularity = 0.5f;
     float objectGlossiness = 10.0f;
     float objectOpacity = 1.0f;
-    Vector3 sunLightPosition = Vector3RotateByQuaternion((Vector3){ 0.0f, 0.0f, 1.0f }, QuaternionFromAxisAngle((Vector3){ 0.0f, 1.0f, 0.0f }, app->renderSettings.sunAzimuth));
+    Vector3 sunLightPosition = Vector3RotateByQuaternion((Vector3){ 0.0f, 0.0f, 1.0f }, QuaternionFromAxisAngle((Vector3){ 0.0f, 1.0f, 0.0f }, app->renderSettings.lightAzimuth));
     Vector3 sunLightAxis = Vector3Normalize(Vector3CrossProduct(sunLightPosition, (Vector3){ 0.0f, 1.0f, 0.0f }));
-    Vector3 sunLightDir = Vector3Negate(Vector3RotateByQuaternion(sunLightPosition, QuaternionFromAxisAngle(sunLightAxis, app->renderSettings.sunAltitude)));
+    Vector3 lightDir = Vector3Negate(Vector3RotateByQuaternion(sunLightPosition, QuaternionFromAxisAngle(sunLightAxis, app->renderSettings.lightAltitude)));
     SetShaderValue(app->shader, app->uniforms.cameraPosition, &app->camera.cam3d.position, SHADER_UNIFORM_VEC3);
     SetShaderValue(app->shader, app->uniforms.exposure, &app->renderSettings.exposure, SHADER_UNIFORM_FLOAT);
     int enableLighting = app->renderSettings.enableLighting;
     SetShaderValue(app->shader, app->uniforms.enableLighting, &enableLighting, SHADER_UNIFORM_INT);
-    SetShaderValue(app->shader, app->uniforms.sunDir, &sunLightDir, SHADER_UNIFORM_VEC3);
-    SetShaderValue(app->shader, app->uniforms.sunStrength, &app->renderSettings.sunLightStrength, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(app->shader, app->uniforms.sunColor, &sunColorValue, SHADER_UNIFORM_VEC3);
-    SetShaderValue(app->shader, app->uniforms.skyStrength, &app->renderSettings.skyLightStrength, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(app->shader, app->uniforms.skyColor, &skyColorValue, SHADER_UNIFORM_VEC3);
-    SetShaderValue(app->shader, app->uniforms.ambientStrength, &app->renderSettings.ambientLightStrength, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(app->shader, app->uniforms.groundStrength, &app->renderSettings.groundLightStrength, SHADER_UNIFORM_FLOAT);
+    // Legacy lighting uniforms (hardcoded original defaults, not exposed in UI)
+    SetShaderValue(app->shader, app->uniforms.sunDir, &lightDir, SHADER_UNIFORM_VEC3);
+    float sunStrengthVal = 0.25f;
+    float skyStrengthVal = 0.15f;
+    float ambientStrengthVal = 1.0f;
+    float groundStrengthVal = 0.1f;
+    Vector3 sunColorVal = { 253.0f/255.0f, 255.0f/255.0f, 232.0f/255.0f };
+    Vector3 skyColorVal = { 174.0f/255.0f, 183.0f/255.0f, 190.0f/255.0f };
+    SetShaderValue(app->shader, app->uniforms.sunStrength, &sunStrengthVal, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(app->shader, app->uniforms.sunColor, &sunColorVal, SHADER_UNIFORM_VEC3);
+    SetShaderValue(app->shader, app->uniforms.skyStrength, &skyStrengthVal, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(app->shader, app->uniforms.skyColor, &skyColorVal, SHADER_UNIFORM_VEC3);
+    SetShaderValue(app->shader, app->uniforms.ambientStrength, &ambientStrengthVal, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(app->shader, app->uniforms.groundStrength, &groundStrengthVal, SHADER_UNIFORM_FLOAT);
     SetShaderValue(app->shader, app->uniforms.objectSpecularity, &objectSpecularity, SHADER_UNIFORM_FLOAT);
     SetShaderValue(app->shader, app->uniforms.objectGlossiness, &objectGlossiness, SHADER_UNIFORM_FLOAT);
     SetShaderValue(app->shader, app->uniforms.objectOpacity, &objectOpacity, SHADER_UNIFORM_FLOAT);
@@ -800,69 +806,38 @@ void ApplicationUpdate(void* voidApplicationState)
     SetShaderValue(app->shader, app->uniforms.usePBR, &usePBR, SHADER_UNIFORM_INT);
     SetShaderValue(app->shader, app->uniforms.aoLookupResolution, &app->capsuleData.aoLookupResolution, SHADER_UNIFORM_VEC2);
     SetShaderValue(app->shader, app->uniforms.shadowLookupResolution, &app->capsuleData.shadowLookupResolution, SHADER_UNIFORM_VEC2);
-    // Core PBR maps occupy slots 0..5. Keep lookup and studio-light textures on
-    // fixed slots so DrawMesh() cannot overwrite or unbind them.
+    // Core PBR maps occupy slots 0..5. Keep lookup textures on fixed slots so
+    // DrawMesh() cannot overwrite or unbind them.
     int aoLookupSlot = 6;
     int shadowLookupSlot = 7;
-    int environmentSlot = 8;
     rlActiveTextureSlot(aoLookupSlot);
     rlEnableTexture(app->capsuleData.aoLookupTable.id);
     rlActiveTextureSlot(shadowLookupSlot);
     rlEnableTexture(app->capsuleData.shadowLookupTable.id);
-    if (app->studioLight.id != 0)
-    {
-        rlActiveTextureSlot(environmentSlot);
-        rlEnableTexture(app->studioLight.id);
-    }
     rlActiveTextureSlot(0);
     SetShaderValue(app->shader, app->uniforms.aoLookupTable, &aoLookupSlot, SHADER_UNIFORM_INT);
     SetShaderValue(app->shader, app->uniforms.shadowLookupTable, &shadowLookupSlot, SHADER_UNIFORM_INT);
-    SetShaderValue(app->shader, app->uniforms.environmentMap, &environmentSlot, SHADER_UNIFORM_INT);
-    int useEnvironmentMap = app->studioLight.id != 0;
-    float environmentMaxLod = app->studioLight.mipmaps > 0 ? (float)(app->studioLight.mipmaps - 1) : 0.0f;
-    SetShaderValue(app->shader, app->uniforms.useEnvironmentMap, &useEnvironmentMap, SHADER_UNIFORM_INT);
-    SetShaderValue(app->shader, app->uniforms.environmentMaxLod, &environmentMaxLod, SHADER_UNIFORM_FLOAT);
+    // Studio environment lighting is now an order-2 SH (9 RGB coeffs) instead of
+    // textures - upload the whole coefficient array as a vec3 uniform.
+    SetShaderValueV(app->shader, app->uniforms.environmentSH,
+        studio_sh_coeffs, SHADER_UNIFORM_VEC3, studio_sh_count);
 
-    // Draw Ground
+    // Draw Ground — diffuse checker with AO/shadow occlusion, no IBL tint
     PROFILE_BEGIN(RenderingGround);
     if (app->renderSettings.drawChecker)
     {
         int groundIsCapsule = 0;
         int groundUseTexture = 0;
+        int groundUsePBR = 0;
         Vector3 groundColor = { 0.65f, 0.65f, 0.65f };
         SetShaderValue(app->shader, app->uniforms.isCapsule, &groundIsCapsule, SHADER_UNIFORM_INT);
         SetShaderValue(app->shader, app->uniforms.useTexture, &groundUseTexture, SHADER_UNIFORM_INT);
+        SetShaderValue(app->shader, app->uniforms.usePBR, &groundUsePBR, SHADER_UNIFORM_INT);
         SetShaderValue(app->shader, app->uniforms.objectColor, &groundColor, SHADER_UNIFORM_VEC3);
-        // Freeze lighting to defaults for checker floor — panel controls do not apply
-        float savedSunStrength = app->renderSettings.sunLightStrength;
-        float savedSkyStrength = app->renderSettings.skyLightStrength;
-        float savedGroundStrength = app->renderSettings.groundLightStrength;
-        float savedAmbientStrength = app->renderSettings.ambientLightStrength;
-        Vector3 savedSunColor = sunColorValue;
-        Vector3 savedSkyColor = skyColorValue;
-        Vector3 savedSunDir = sunLightDir;
-        float savedExposure = app->renderSettings.exposure;
-        int savedEnableLighting = enableLighting;
-        int defaultEnableLighting = 1;
-        SetShaderValue(app->shader, app->uniforms.enableLighting, &defaultEnableLighting, SHADER_UNIFORM_INT);
-        Vector3 defaultSunColor = { 253.0f/255.0f, 255.0f/255.0f, 232.0f/255.0f };
-        Vector3 defaultSkyColor = { 174.0f/255.0f, 183.0f/255.0f, 190.0f/255.0f };
-        float defaultSunStrength = 0.25f;
-        float defaultSkyStrength = 0.15f;
-        float defaultGroundStrength = 0.1f;
-        float defaultAmbientStrength = 1.0f;
-        float defaultExposure = 0.9f;
-        Vector3 defaultSunLightPos = Vector3RotateByQuaternion((Vector3){ 0.0f, 0.0f, 1.0f }, QuaternionFromAxisAngle((Vector3){ 0.0f, 1.0f, 0.0f }, PI / 4.0f));
-        Vector3 defaultSunLightAxis = Vector3Normalize(Vector3CrossProduct(defaultSunLightPos, (Vector3){ 0.0f, 1.0f, 0.0f }));
-        Vector3 groundSunDir = Vector3Negate(Vector3RotateByQuaternion(defaultSunLightPos, QuaternionFromAxisAngle(defaultSunLightAxis, 0.8f)));
-        SetShaderValue(app->shader, app->uniforms.sunStrength, &defaultSunStrength, SHADER_UNIFORM_FLOAT);
-        SetShaderValue(app->shader, app->uniforms.sunColor, &defaultSunColor, SHADER_UNIFORM_VEC3);
-        SetShaderValue(app->shader, app->uniforms.skyStrength, &defaultSkyStrength, SHADER_UNIFORM_FLOAT);
-        SetShaderValue(app->shader, app->uniforms.skyColor, &defaultSkyColor, SHADER_UNIFORM_VEC3);
-        SetShaderValue(app->shader, app->uniforms.ambientStrength, &defaultAmbientStrength, SHADER_UNIFORM_FLOAT);
-        SetShaderValue(app->shader, app->uniforms.groundStrength, &defaultGroundStrength, SHADER_UNIFORM_FLOAT);
-        SetShaderValue(app->shader, app->uniforms.sunDir, &groundSunDir, SHADER_UNIFORM_VEC3);
-        SetShaderValue(app->shader, app->uniforms.exposure, &defaultExposure, SHADER_UNIFORM_FLOAT);
+        int groundEnableLighting = 1;
+        float groundExposure = 0.9f;
+        SetShaderValue(app->shader, app->uniforms.enableLighting, &groundEnableLighting, SHADER_UNIFORM_INT);
+        SetShaderValue(app->shader, app->uniforms.exposure, &groundExposure, SHADER_UNIFORM_FLOAT);
         for (int i = 0; i < 11; i++)
         {
             for (int j = 0; j < 11; j++)
@@ -883,7 +858,7 @@ void ApplicationUpdate(void* voidApplicationState)
                 PROFILE_BEGIN(RenderingGroundSegmentShadow);
                 app->capsuleData.shadowCapsuleCount = 0;
                 if (app->renderSettings.drawCapsules)
-                    CapsuleDataUpdateShadowCapsulesForGroundSegment(&app->capsuleData, groundSegmentPosition, groundSunDir, app->renderSettings.sunLightConeAngle);
+                    CapsuleDataUpdateShadowCapsulesForGroundSegment(&app->capsuleData, groundSegmentPosition, lightDir, app->renderSettings.lightConeAngle);
                 int shadowCapsuleCount = MinInt(app->capsuleData.shadowCapsuleCount, SHADOW_CAPSULES_MAX);
                 PROFILE_END(RenderingGroundSegmentShadow);
                 SetShaderValue(app->shader, app->uniforms.shadowCapsuleCount, &shadowCapsuleCount, SHADER_UNIFORM_INT);
@@ -894,15 +869,9 @@ void ApplicationUpdate(void* voidApplicationState)
                 PROFILE_END(RenderingGroundSegment);
             }
         }
-        SetShaderValue(app->shader, app->uniforms.sunStrength, &savedSunStrength, SHADER_UNIFORM_FLOAT);
-        SetShaderValue(app->shader, app->uniforms.sunColor, &savedSunColor, SHADER_UNIFORM_VEC3);
-        SetShaderValue(app->shader, app->uniforms.skyStrength, &savedSkyStrength, SHADER_UNIFORM_FLOAT);
-        SetShaderValue(app->shader, app->uniforms.skyColor, &savedSkyColor, SHADER_UNIFORM_VEC3);
-        SetShaderValue(app->shader, app->uniforms.ambientStrength, &savedAmbientStrength, SHADER_UNIFORM_FLOAT);
-        SetShaderValue(app->shader, app->uniforms.groundStrength, &savedGroundStrength, SHADER_UNIFORM_FLOAT);
-        SetShaderValue(app->shader, app->uniforms.sunDir, &savedSunDir, SHADER_UNIFORM_VEC3);
-        SetShaderValue(app->shader, app->uniforms.exposure, &savedExposure, SHADER_UNIFORM_FLOAT);
-        SetShaderValue(app->shader, app->uniforms.enableLighting, &savedEnableLighting, SHADER_UNIFORM_INT);
+        SetShaderValue(app->shader, app->uniforms.enableLighting, &enableLighting, SHADER_UNIFORM_INT);
+        SetShaderValue(app->shader, app->uniforms.usePBR, &usePBR, SHADER_UNIFORM_INT);
+        SetShaderValue(app->shader, app->uniforms.exposure, &app->renderSettings.exposure, SHADER_UNIFORM_FLOAT);
     }
     PROFILE_END(RenderingGround);
 
@@ -960,6 +929,7 @@ void ApplicationUpdate(void* voidApplicationState)
                 // Per-material texture checks. PBR maps are bound by DrawMesh().
                 int hasTexture = 0;
                 int hasMetalness = 0;
+                int hasRoughness = 0;
                 int hasNormal = 0;
                 int hasOcclusion = 0;
                 int hasEmission = 0;
@@ -970,6 +940,8 @@ void ApplicationUpdate(void* voidApplicationState)
                         hasTexture = 1;
                     tex = material.maps[MATERIAL_MAP_METALNESS].texture;
                     hasMetalness = tex.id > 0 && tex.id != defaultTexId;
+                    tex = material.maps[MATERIAL_MAP_ROUGHNESS].texture;
+                    hasRoughness = tex.id > 0 && tex.id != defaultTexId;
                     tex = material.maps[MATERIAL_MAP_NORMAL].texture;
                     hasNormal = tex.id > 0 && tex.id != defaultTexId;
                     tex = material.maps[MATERIAL_MAP_OCCLUSION].texture;
@@ -1006,6 +978,7 @@ void ApplicationUpdate(void* voidApplicationState)
                 }
                 SetShaderValue(app->shader, app->uniforms.usePBR, &materialUsePBR, SHADER_UNIFORM_INT);
                 SetShaderValue(app->shader, app->uniforms.useMetalnessTexture, &hasMetalness, SHADER_UNIFORM_INT);
+                SetShaderValue(app->shader, app->uniforms.useRoughnessTexture, &hasRoughness, SHADER_UNIFORM_INT);
                 SetShaderValue(app->shader, app->uniforms.useNormalTexture, &hasNormal, SHADER_UNIFORM_INT);
                 SetShaderValue(app->shader, app->uniforms.useOcclusionTexture, &hasOcclusion, SHADER_UNIFORM_INT);
                 SetShaderValue(app->shader, app->uniforms.useEmissionTexture, &hasEmission, SHADER_UNIFORM_INT);
@@ -1111,7 +1084,7 @@ void ApplicationUpdate(void* voidApplicationState)
             SetShaderValueV(app->shader, app->uniforms.aoCapsuleRadii, app->capsuleData.aoCapsuleRadii, SHADER_UNIFORM_FLOAT, aoCapsuleCount);
             PROFILE_BEGIN(RenderingCapsulesCapsuleShadow);
             app->capsuleData.shadowCapsuleCount = 0;
-            CapsuleDataUpdateShadowCapsulesForCapsule(&app->capsuleData, j, sunLightDir, app->renderSettings.sunLightConeAngle);
+            CapsuleDataUpdateShadowCapsulesForCapsule(&app->capsuleData, j, lightDir, app->renderSettings.lightConeAngle);
             int shadowCapsuleCount = MinInt(app->capsuleData.shadowCapsuleCount, SHADOW_CAPSULES_MAX);
             PROFILE_END(RenderingCapsulesCapsuleShadow);
             SetShaderValue(app->shader, app->uniforms.shadowCapsuleCount, &shadowCapsuleCount, SHADER_UNIFORM_INT);
@@ -1129,11 +1102,6 @@ void ApplicationUpdate(void* voidApplicationState)
     rlDisableTexture();
     rlActiveTextureSlot(shadowLookupSlot);
     rlDisableTexture();
-    if (app->studioLight.id != 0)
-    {
-        rlActiveTextureSlot(environmentSlot);
-        rlDisableTexture();
-    }
     rlActiveTextureSlot(0);
 
     if (app->renderSettings.drawGrid) DrawGrid(20, 1.0f);

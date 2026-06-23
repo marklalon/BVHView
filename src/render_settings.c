@@ -12,15 +12,9 @@
 void RenderSettingsInit(RenderSettings* settings, int argc, char** argv)
 {
     settings->backgroundColor = ArgColor(argc, argv, "backgroundColor", DEFAULT_BACKGROUND_COLOR);
-    settings->sunLightConeAngle = ArgFloat(argc, argv, "sunLightConeAngle", 0.2f);
-    settings->sunLightStrength = ArgFloat(argc, argv, "sunLightStrength", 0.25f);
-    settings->sunAzimuth = ArgFloat(argc, argv, "sunAzimuth", PI / 4.0f);
-    settings->sunAltitude = ArgFloat(argc, argv, "sunAltitude", 0.8f);
-    settings->sunColor = ArgColor(argc, argv, "sunColor", (Color){ 253, 255, 232 });
-    settings->skyLightStrength = ArgFloat(argc, argv, "skyLightStrength", 0.15f);
-    settings->skyColor = ArgColor(argc, argv, "skyColor", (Color){ 174, 183, 190 });
-    settings->groundLightStrength = ArgFloat(argc, argv, "groundLightStrength", 0.1f);
-    settings->ambientLightStrength = ArgFloat(argc, argv, "ambientLightStrength", 1.0f);
+    settings->lightConeAngle = ArgFloat(argc, argv, "lightConeAngle", 0.2f);
+    settings->lightAzimuth = ArgFloat(argc, argv, "lightAzimuth", PI / 4.0f);
+    settings->lightAltitude = ArgFloat(argc, argv, "lightAltitude", 0.8f);
     settings->exposure = ArgFloat(argc, argv, "exposure", 0.9f);
     settings->drawOrigin = ArgBool(argc, argv, "drawOrigin", true);
     settings->drawGrid = ArgBool(argc, argv, "drawGrid", false);

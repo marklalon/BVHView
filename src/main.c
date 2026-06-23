@@ -372,7 +372,8 @@ int main(int argc, char** argv)
 
     app.shader = LoadShaderFromMemory(shaderVS, shaderFS);
     ShaderUniformsInit(&app.uniforms, app.shader);
-    app.studioLight = StudioLightLoad();
+    // Studio environment lighting is an embedded order-2 SH (studio_sh_coeffs);
+    // ApplicationUpdate uploads it as a uniform, so there is nothing to load here.
 
     app.groundPlaneMesh = GenMeshPlane(2.0f, 2.0f, 1, 1);
     app.groundPlaneModel = LoadModelFromMesh(app.groundPlaneMesh);
@@ -385,7 +386,7 @@ int main(int argc, char** argv)
     CapsuleDataInit(&app.capsuleData);
     ScrubberSettingsInit(&app.scrubberSettings, argc, argv);
     RenderSettingsInit(&app.renderSettings, argc, argv);
-    CapsuleDataUpdateShadowLookupTable(&app.capsuleData, app.renderSettings.sunLightConeAngle);
+    CapsuleDataUpdateShadowLookupTable(&app.capsuleData, app.renderSettings.lightConeAngle);
 
     app.fileDialogState = InitGuiWindowFileDialog(GetWorkingDirectory());
     app.errMsg[0] = '\0';
@@ -430,7 +431,6 @@ int main(int argc, char** argv)
     CharacterDataFree(&app.characterData);
     UnloadModel(app.capsuleModel);
     UnloadModel(app.groundPlaneModel);
-    if (app.studioLight.id != 0) UnloadTexture(app.studioLight);
     UnloadShader(app.shader);
 #if defined(_WIN32) && !defined(PLATFORM_WEB)
     if (app.reuseMailslot && app.reuseMailslot != INVALID_HANDLE_VALUE)

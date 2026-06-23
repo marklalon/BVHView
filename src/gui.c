@@ -380,14 +380,10 @@ void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterData, RenderSet
 
         // Reset lighting/render panel to defaults
         settings->exposure = ArgFloat(argc, argv, "exposure", 0.9f);
-        settings->sunLightStrength = ArgFloat(argc, argv, "sunLightStrength", 0.25f);
-        settings->sunLightConeAngle = ArgFloat(argc, argv, "sunLightConeAngle", 0.2f);
-        CapsuleDataUpdateShadowLookupTable(capsuleData, settings->sunLightConeAngle);
-        settings->skyLightStrength = ArgFloat(argc, argv, "skyLightStrength", 0.15f);
-        settings->ambientLightStrength = ArgFloat(argc, argv, "ambientLightStrength", 1.0f);
-        settings->groundLightStrength = ArgFloat(argc, argv, "groundLightStrength", 0.1f);
-        settings->sunAzimuth = ArgFloat(argc, argv, "sunAzimuth", PI / 4.0f);
-        settings->sunAltitude = ArgFloat(argc, argv, "sunAltitude", 0.8f);
+        settings->lightConeAngle = ArgFloat(argc, argv, "lightConeAngle", 0.2f);
+        CapsuleDataUpdateShadowLookupTable(capsuleData, settings->lightConeAngle);
+        settings->lightAzimuth = ArgFloat(argc, argv, "lightAzimuth", PI / 4.0f);
+        settings->lightAltitude = ArgFloat(argc, argv, "lightAltitude", 0.8f);
     }
 
     // Skeleton/animation controls are meaningless for mesh-only GLBs (no joints),
@@ -564,14 +560,10 @@ void GuiRenderSettings(RenderSettings* settings, CapsuleData* capsuleData, bool 
 {
     GuiCustomGroupBox((Rectangle){ screenWidth - 270, 10, 250, 480 }, "Rendering");
     GuiSliderBar((Rectangle){ screenWidth - 170, 30, 100, 20 }, "Exposure", TextFormat("%5.2f", settings->exposure), &settings->exposure, 0.0f, 3.0f);
-    GuiSliderBar((Rectangle){ screenWidth - 170, 60, 100, 20 }, "Sun Light", TextFormat("%5.2f", settings->sunLightStrength), &settings->sunLightStrength, 0.0f, 1.0f);
-    if (GuiSliderBar((Rectangle){ screenWidth - 170, 90, 100, 20 }, "Sun Softness", TextFormat("%5.2f", settings->sunLightConeAngle), &settings->sunLightConeAngle, 0.02f, PI / 4.0f))
-        CapsuleDataUpdateShadowLookupTable(capsuleData, settings->sunLightConeAngle);
-    GuiSliderBar((Rectangle){ screenWidth - 170, 120, 100, 20 }, "Sky Light", TextFormat("%5.2f", settings->skyLightStrength), &settings->skyLightStrength, 0.0f, 1.0f);
-    GuiSliderBar((Rectangle){ screenWidth - 170, 150, 100, 20 }, "Ambient Light", TextFormat("%5.2f", settings->ambientLightStrength), &settings->ambientLightStrength, 0.0f, 2.0f);
-    GuiSliderBar((Rectangle){ screenWidth - 170, 180, 100, 20 }, "Ground Light", TextFormat("%5.2f", settings->groundLightStrength), &settings->groundLightStrength, 0.0f, 0.5f);
-    GuiSliderBar((Rectangle){ screenWidth - 170, 210, 100, 20 }, "Sun Azimuth", TextFormat("%5.2f", settings->sunAzimuth), &settings->sunAzimuth, -PI, PI);
-    GuiSliderBar((Rectangle){ screenWidth - 170, 240, 100, 20 }, "Sun Altitude", TextFormat("%5.2f", settings->sunAltitude), &settings->sunAltitude, 0.0f, 0.49f * PI);
+    if (GuiSliderBar((Rectangle){ screenWidth - 170, 60, 100, 20 }, "Light Softness", TextFormat("%5.2f", settings->lightConeAngle), &settings->lightConeAngle, 0.02f, PI / 4.0f))
+        CapsuleDataUpdateShadowLookupTable(capsuleData, settings->lightConeAngle);
+    GuiSliderBar((Rectangle){ screenWidth - 170, 90, 100, 20 }, "Light Azimuth", TextFormat("%5.2f", settings->lightAzimuth), &settings->lightAzimuth, -PI, PI);
+    GuiSliderBar((Rectangle){ screenWidth - 170, 120, 100, 20 }, "Light Altitude", TextFormat("%5.2f", settings->lightAltitude), &settings->lightAltitude, 0.0f, 0.49f * PI);
     GuiCheckBox((Rectangle){ screenWidth - 260, 270, 20, 20 }, "Draw Origin", &settings->drawOrigin);
     GuiCheckBox((Rectangle){ screenWidth - 140, 270, 20, 20 }, "Draw Grid", &settings->drawGrid);
     GuiCheckBox((Rectangle){ screenWidth - 260, 300, 20, 20 }, "Draw Checker", &settings->drawChecker);
