@@ -841,8 +841,12 @@ void ApplicationUpdate(void* voidApplicationState)
         SetShaderValue(app->shader, app->uniforms.objectColor, &groundColor, SHADER_UNIFORM_VEC3);
         int groundEnableLighting = 1;
         float groundExposure = 0.9f;
+        float groundSunStrength = 0.25f;
+        float groundAmbientStrength = 1.0f;
         SetShaderValue(app->shader, app->uniforms.enableLighting, &groundEnableLighting, SHADER_UNIFORM_INT);
         SetShaderValue(app->shader, app->uniforms.exposure, &groundExposure, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(app->shader, app->uniforms.sunStrength, &groundSunStrength, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(app->shader, app->uniforms.ambientStrength, &groundAmbientStrength, SHADER_UNIFORM_FLOAT);
         for (int i = 0; i < 11; i++)
         {
             for (int j = 0; j < 11; j++)
@@ -876,6 +880,8 @@ void ApplicationUpdate(void* voidApplicationState)
         }
         SetShaderValue(app->shader, app->uniforms.enableLighting, &enableLighting, SHADER_UNIFORM_INT);
         SetShaderValue(app->shader, app->uniforms.usePBR, &usePBR, SHADER_UNIFORM_INT);
+        SetShaderValue(app->shader, app->uniforms.sunStrength, &sunStrengthVal, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(app->shader, app->uniforms.ambientStrength, &ambientStrengthVal, SHADER_UNIFORM_FLOAT);
         SetShaderValue(app->shader, app->uniforms.exposure, &app->renderSettings.exposure, SHADER_UNIFORM_FLOAT);
     }
     PROFILE_END(RenderingGround);

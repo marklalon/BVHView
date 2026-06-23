@@ -495,7 +495,7 @@ void main()
             shadowCapsuleStarts[i],
             shadowCapsuleVectors[i],
             shadowCapsuleRadii[i],
-            lightDir));
+            sunDir));
     }
     
     float ambShadow = 1.0;
