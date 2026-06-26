@@ -277,6 +277,79 @@ static bool TransformDataSampleFrameGLBExact(TransformData* data, GLBData* glb, 
             default: break;
         }
     }
+
+    // ---- Phase 1: accumulate animated overrides for non-skin-joint nodes
+    // that are parents of root bones. These carry root motion (e.g. Y
+    // translation on an "Armature" node above the skin skeleton).
+    // We must accumulate all channels before computing the parent world,
+    // because a parent may have separate translation + rotation channels.
+    Transform* parentLocals = (Transform*)calloc((size_t)boneCount, sizeof(Transform));
+    bool* parentHasAnim = (bool*)calloc((size_t)boneCount, sizeof(bool));
+    if (parentLocals == NULL || parentHasAnim == NULL)
+    {
+        free(parentLocals);
+        free(parentHasAnim);
+        return false;
+    }
+    for (int boneIdx = 0; boneIdx < boneCount; boneIdx++)
+    {
+        if (glb->model.skeleton.bones[boneIdx].parent != -1) continue;
+        if (boneIdx >= (int)glb->sourceSkin->joints_count) continue;
+        const cgltf_node* skinJoint = glb->sourceSkin->joints[boneIdx];
+        if (skinJoint == NULL || skinJoint->parent == NULL) continue;
+        parentLocals[boneIdx] = GLBNodeLocalTransform(skinJoint->parent);
+    }
+    for (cgltf_size channelIdx = 0; channelIdx < anim->channels_count; channelIdx++)
+    {
+        cgltf_animation_channel* channel = &anim->channels[channelIdx];
+        if (channel->sampler == NULL) { free(parentLocals); free(parentHasAnim); return false; }
+        if (GLBFindSkinJointIndex(glb->sourceSkin, channel->target_node) >= 0) continue;
+        for (int boneIdx = 0; boneIdx < boneCount; boneIdx++)
+        {
+            if (glb->model.skeleton.bones[boneIdx].parent != -1) continue;
+            if (boneIdx >= (int)glb->sourceSkin->joints_count) continue;
+            const cgltf_node* skinJoint = glb->sourceSkin->joints[boneIdx];
+            if (skinJoint == NULL || skinJoint->parent != channel->target_node) continue;
+            parentHasAnim[boneIdx] = true;
+            switch (channel->target_path)
+            {
+                case cgltf_animation_path_type_translation:
+                    if (!GLBGetPoseAtTime(channel->sampler->interpolation, channel->sampler->input, channel->sampler->output, timeClamped, &parentLocals[boneIdx].translation)) { free(parentLocals); free(parentHasAnim); return false; }
+                    break;
+                case cgltf_animation_path_type_rotation:
+                    if (!GLBGetPoseAtTime(channel->sampler->interpolation, channel->sampler->input, channel->sampler->output, timeClamped, &parentLocals[boneIdx].rotation)) { free(parentLocals); free(parentHasAnim); return false; }
+                    parentLocals[boneIdx].rotation = QuaternionNormalize(parentLocals[boneIdx].rotation);
+                    break;
+                case cgltf_animation_path_type_scale:
+                    if (!GLBGetPoseAtTime(channel->sampler->interpolation, channel->sampler->input, channel->sampler->output, timeClamped, &parentLocals[boneIdx].scale)) { free(parentLocals); free(parentHasAnim); return false; }
+                    break;
+                default: break;
+            }
+            break;
+        }
+    }
+
+    // ---- Phase 2: compute parent world transforms from accumulated locals.
+    for (int boneIdx = 0; boneIdx < boneCount; boneIdx++)
+    {
+        if (!parentHasAnim[boneIdx]) continue;
+        const cgltf_node* skinJoint = glb->sourceSkin->joints[boneIdx];
+        const cgltf_node* parentNode = skinJoint->parent;
+        Matrix grandparentWorld = MatrixIdentity();
+        if (parentNode->parent != NULL)
+        {
+            cgltf_float gpMatrix[16] = { 0 };
+            cgltf_node_transform_world(parentNode->parent, gpMatrix);
+            grandparentWorld = GLBMatrixFromCgltf(gpMatrix);
+        }
+        Matrix parentLocalMatrix = GLBTransformToMatrix(parentLocals[boneIdx]);
+        Matrix parentWorldMatrix = MatrixMultiply(grandparentWorld, parentLocalMatrix);
+        MatrixDecompose(parentWorldMatrix, &glb->sourceRootPose[boneIdx].translation, &glb->sourceRootPose[boneIdx].rotation, &glb->sourceRootPose[boneIdx].scale);
+        glb->sourceRootPose[boneIdx].rotation = QuaternionNormalize(glb->sourceRootPose[boneIdx].rotation);
+    }
+    free(parentLocals);
+    free(parentHasAnim);
+
     TransformDataComputeGLBSourceFK(glb, boneCount);
     GLBDataUpdateModelPose(glb, glb->sourceGlobalPose);
     TransformDataGlobalPoseToLocal(data, boneCount, glb->topoOrder, glb->sourceGlobalPose, scale);

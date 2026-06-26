@@ -294,7 +294,7 @@ float GLBDataGetSourceDuration(const GLBData* data, int animIdx)
     return (GLBDataGetSourceFrameCount(data, animIdx) - 1) * GLBDataGetSourceFrameTime(data, animIdx);
 }
 
-static Matrix GLBMatrixFromCgltf(const cgltf_float* m)
+Matrix GLBMatrixFromCgltf(const cgltf_float* m)
 {
     return (Matrix){
         m[0], m[4], m[8], m[12],
@@ -304,7 +304,7 @@ static Matrix GLBMatrixFromCgltf(const cgltf_float* m)
     };
 }
 
-static Matrix GLBTransformToMatrix(Transform transform)
+Matrix GLBTransformToMatrix(Transform transform)
 {
     return MatrixMultiply(
         MatrixMultiply(MatrixScale(transform.scale.x, transform.scale.y, transform.scale.z),
@@ -487,7 +487,7 @@ Matrix GLBDataGetModelTransform(const GLBData* glb, float scale, bool inplace)
     return MatrixMultiply(glb->model.transform, transform);
 }
 
-static Transform GLBNodeLocalTransform(const cgltf_node* node)
+Transform GLBNodeLocalTransform(const cgltf_node* node)
 {
     Transform transform = { .translation = { 0.0f, 0.0f, 0.0f }, .rotation = { 0.0f, 0.0f, 0.0f, 1.0f }, .scale = { 1.0f, 1.0f, 1.0f } };
     if (node == NULL) return transform;

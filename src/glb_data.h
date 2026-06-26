@@ -74,5 +74,8 @@ void ComputeTopoOrder(int boneCount, BoneInfo* bones, int* topoOrder, int* invTo
 // GLB pose helpers (used by transform_data.c)
 int GLBFindSkinJointIndex(const cgltf_skin* skin, const cgltf_node* node);
 bool GLBGetPoseAtTime(cgltf_interpolation_type interpolationType, cgltf_accessor* input, cgltf_accessor* output, float time, void* data);
+Matrix GLBMatrixFromCgltf(const cgltf_float* m);
+Matrix GLBTransformToMatrix(Transform transform);
+Transform GLBNodeLocalTransform(const cgltf_node* node);
 
 #endif // GLB_DATA_H
