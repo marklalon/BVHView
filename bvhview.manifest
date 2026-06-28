@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity
+    name="BVHView"
+    processorArchitecture="*"
+    version="1.0.0.0"
+    type="win32"
+  />
+  <description>BVHView - BVH/GLTF Animation Viewer</description>
+  <!-- Enable UTF-8 as the active code page (Windows 10 1903+).
+       This makes fopen(), FindFirstFileA(), and other ANSI Windows APIs
+       treat char* strings as UTF-8 instead of the system locale code page,
+       enabling support for Chinese and other Unicode characters in file paths. -->
+  <application>
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+</assembly>

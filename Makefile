@@ -127,13 +127,22 @@ ifeq ($(PLATFORM),PLATFORM_WEB)
     endif
 endif
 
-.PHONY: all
+.PHONY: all clean
 
 all: bvhview
 
-bvhview: $(SOURCES)
-	$(CC) -o $@$(EXT) $(SOURCES) $(CFLAGS) $(LIBS) 
+# Windows-only: compile resource file (.rc -> .res)
+ifneq ($(filter MINGW Windows_NT,$(PLATFORM_OS)),)
+    bvhview.res: bvhview.rc bvhview.manifest
+	windres $< -O coff -o $@
+
+    bvhview: bvhview.res $(SOURCES)
+	$(CC) -o $@$(EXT) $(SOURCES) $(CFLAGS) $(LIBS)
+else
+    bvhview: $(SOURCES)
+	$(CC) -o $@$(EXT) $(SOURCES) $(CFLAGS) $(LIBS)
+endif
 
 clean:
-	rm bvhview$(EXT)
+	rm -f bvhview$(EXT) bvhview.res
 

@@ -14,6 +14,54 @@
 #include "raymath.h"
 #include "bvh_data.h"
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOGDI
+#define NOGDI
+#endif
+#ifndef NOUSER
+#define NOUSER
+#endif
+#include <windows.h>
+// windows.h (even with WIN32_LEAN_AND_MEAN) defines Rectangle as a macro,
+// which conflicts with raylib's Rectangle struct.
+#undef Rectangle
+
+// Open a file with UTF-8 path support on Windows.
+// Falls back to plain fopen() if the active code page already handles UTF-8
+// (e.g. when app manifest sets activeCodePage=UTF-8).
+static FILE* fopen_utf8(const char* filename, const char* mode)
+{
+    // First try fopen() directly — this works if the active code page is UTF-8
+    // (Windows 10 1903+ with activeCodePage manifest), or if the path happens
+    // to contain only ASCII characters.
+    FILE* f = fopen(filename, mode);
+    if (f != NULL) return f;
+
+    // Convert UTF-8 path to wide characters and use _wfopen
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, filename, -1, NULL, 0);
+    if (wlen <= 0) return NULL;
+
+    wchar_t* wpath = (wchar_t*)malloc(wlen * sizeof(wchar_t));
+    if (wpath == NULL) return NULL;
+    MultiByteToWideChar(CP_UTF8, 0, filename, -1, wpath, wlen);
+
+    int mlen = MultiByteToWideChar(CP_UTF8, 0, mode, -1, NULL, 0);
+    wchar_t* wmode = (wchar_t*)malloc(mlen * sizeof(wchar_t));
+    if (wmode == NULL) { free(wpath); return NULL; }
+    MultiByteToWideChar(CP_UTF8, 0, mode, -1, wmode, mlen);
+
+    f = _wfopen(wpath, wmode);
+    free(wpath);
+    free(wmode);
+    return f;
+}
+#else
+#define fopen_utf8(filename, mode) fopen(filename, mode)
+#endif
+
 void BVHJointDataInit(BVHJointData* data)
 {
     data->parent = -1;
@@ -338,7 +386,7 @@ bool BVHParse(BVHData* bvh, Parser* par)
 // Load file and parse as BVH
 bool BVHDataLoad(BVHData* bvh, const char* filename, char* errMsg, int errMsgSize)
 {
-    FILE* f = fopen(filename, "rb");
+    FILE* f = fopen_utf8(filename, "rb");
     if (f == NULL)
     {
         snprintf(errMsg, errMsgSize, "Error: Could not find file '%s'\n", filename);
