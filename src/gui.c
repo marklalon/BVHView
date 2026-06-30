@@ -703,7 +703,7 @@ void GuiScrubberSettings(ScrubberSettings* settings, CharacterData* characterDat
     if (!ScrubberHasValidAnimation(characterData, characterData->active)) return;
     float frameTime = ScrubberGetFrameTime(characterData, characterData->active);
     GuiCustomGroupBox((Rectangle){ screenWidth / 2 - 600, screenHeight - 100, 1200, 90 }, "Scrubber");
-    GuiLabel((Rectangle){ screenWidth / 2 - 480, screenHeight - 80, 150, 20 }, TextFormat("Frame Time: %f", frameTime));
+    GuiLabel((Rectangle){ screenWidth / 2 - 480, screenHeight - 80, 150, 20 }, TextFormat("FPS: %d", (int)(1.0f / frameTime + 0.5f)));
     GuiCheckBox((Rectangle){ screenWidth / 2 - 350, screenHeight - 80, 20, 20 }, "Snap to Frame", &settings->frameSnap);
     GuiComboBox((Rectangle){ screenWidth / 2 - 240, screenHeight - 80, 100, 20 }, "Nearest;Linear;Cubic", &settings->sampleMode);
     GuiToggle((Rectangle){ screenWidth / 2 - 130, screenHeight - 80, 50, 20 }, "Inplace", &settings->inplace);
