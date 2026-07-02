@@ -16,6 +16,7 @@
 void ScrubberSettingsInit(ScrubberSettings* settings, int argc, char** argv)
 {
     settings->playing = ArgBool(argc, argv, "playing", true);
+    settings->userPaused = false;
     settings->looping = ArgBool(argc, argv, "looping", true);
     settings->inplace = ArgBool(argc, argv, "inplace", false);
     settings->playTime = ArgFloat(argc, argv, "playTime", 0.0f);

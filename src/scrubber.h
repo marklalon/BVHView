@@ -14,6 +14,7 @@ typedef struct CharacterData CharacterData;
 
 typedef struct ScrubberSettings {
     bool playing;
+    bool userPaused;    // true when user explicitly paused (suppress auto-play)
     bool looping;
     bool inplace;
     float playTime;

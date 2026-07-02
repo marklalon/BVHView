@@ -708,7 +708,12 @@ void GuiScrubberSettings(ScrubberSettings* settings, CharacterData* characterDat
     GuiComboBox((Rectangle){ screenWidth / 2 - 240, screenHeight - 80, 100, 20 }, "Nearest;Linear;Cubic", &settings->sampleMode);
     GuiToggle((Rectangle){ screenWidth / 2 - 130, screenHeight - 80, 50, 20 }, "Inplace", &settings->inplace);
     GuiToggle((Rectangle){ screenWidth / 2 - 70, screenHeight - 80, 50, 20 }, "Loop", &settings->looping);
-    GuiToggle((Rectangle){ screenWidth / 2 - 10, screenHeight - 80, 50, 20 }, "Play", &settings->playing);
+    {
+        bool playPrev = settings->playing;
+        GuiToggle((Rectangle){ screenWidth / 2 - 10, screenHeight - 80, 50, 20 }, "Play", &settings->playing);
+        if (playPrev != settings->playing)
+            settings->userPaused = settings->playing ? false : true;
+    }
     bool speed01x = settings->playSpeed == 0.1f;
     GuiToggle((Rectangle){ screenWidth / 2 + 50, screenHeight - 80, 30, 20 }, "0.1x", &speed01x); if (speed01x) settings->playSpeed = 0.1f;
     bool speed05x = settings->playSpeed == 0.5f;
@@ -796,6 +801,7 @@ void GuiScrubberSettings(ScrubberSettings* settings, CharacterData* characterDat
     if (frameFloat != frameFloatPrev || wrapped)
     {
         settings->playing = false;
+        settings->userPaused = true;
         if (settings->frameSnap)
         {
             frame = ClampInt((int)(frameFloat + 0.5f), settings->frameMin, settings->frameMax);

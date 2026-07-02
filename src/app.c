@@ -379,6 +379,10 @@ void OnFileLoaded(ApplicationState* app)
     ScrubberSettingsRecomputeLimits(&app->scrubberSettings, &app->characterData);
     ScrubberSettingsInitMaxs(&app->scrubberSettings, &app->characterData);
 
+    // Auto-play animation unless user explicitly paused
+    if (!app->scrubberSettings.userPaused && ScrubberHasValidAnimation(&app->characterData, app->characterData.active))
+        app->scrubberSettings.playing = true;
+
     // Build file list first so we know the count/index for the title suffix
     BuildFileList(app, app->characterData.filePaths[app->characterData.active]);
 
@@ -488,6 +492,7 @@ void ApplicationUpdate(void* voidApplicationState)
     if (!app->fileDialogState.windowActive && IsKeyPressed(KEY_SPACE))
     {
         app->scrubberSettings.playing = !app->scrubberSettings.playing;
+        app->scrubberSettings.userPaused = app->scrubberSettings.playing ? false : true;
     }
 
     // Tab: cycle active character
@@ -562,6 +567,10 @@ void ApplicationUpdate(void* voidApplicationState)
                         CapsuleDataUpdateForCharacters(&app->capsuleData, &app->characterData);
                         ScrubberSettingsRecomputeLimits(&app->scrubberSettings, &app->characterData);
                         ScrubberSettingsInitMaxs(&app->scrubberSettings, &app->characterData);
+
+                        // Auto-play animation unless user explicitly paused
+                        if (!app->scrubberSettings.userPaused && ScrubberHasValidAnimation(&app->characterData, app->characterData.active))
+                            app->scrubberSettings.playing = true;
 
                         char windowTitle[600];
                         snprintf(windowTitle, sizeof(windowTitle), "%s (%d/%d) - BVHView",
@@ -672,9 +681,16 @@ void ApplicationUpdate(void* voidApplicationState)
     if (!bindPoseAvailable)
         app->renderSettings.drawBindPose = false;
 
-    // Bind/Rest pose preview pauses the animation
+    // Track bind pose toggle transitions to auto-resume playback
+    static bool prevBindPose = false;
+    bool bindPoseJustDisabled = prevBindPose && !app->renderSettings.drawBindPose;
+    prevBindPose = app->renderSettings.drawBindPose;
+
+    // Bind/Rest pose preview pauses the animation (passive — keep userPaused)
     if (app->renderSettings.drawBindPose)
         app->scrubberSettings.playing = false;
+    else if (bindPoseJustDisabled && !app->scrubberSettings.userPaused && ScrubberHasValidAnimation(&app->characterData, app->characterData.active))
+        app->scrubberSettings.playing = true;
 
     // No skeleton or animation too short → stop playback
     if (!ScrubberHasValidAnimation(&app->characterData, app->characterData.active))
