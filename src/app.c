@@ -4,8 +4,19 @@
 *
 *******************************************************************************************/
 
+// Needed for CompareStringEx() and SORT_DIGITSASNUMBERS (Windows 7+) in
+// ExplorerStricmp.
+#ifndef WINVER
+#define WINVER 0x0601
+#endif
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
+
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <math.h>
 #include "raylib.h"
 #include "raymath.h"
@@ -27,48 +38,104 @@
 #define MAILSLOT_NO_MESSAGE ((DWORD)-1)
 #endif
 
-// Natural-order, case-insensitive string compare (matches Windows Explorer behaviour).
-// Digit sequences are compared numerically; punctuation '_' sorts before '-'.
+// Portable fallback for non-Windows platforms and Windows API/conversion failures.
+// Digit runs compare numerically, and underscores sort before other characters to
+// preserve the filename ordering used by the Windows comparison below.
 static int NaturalStricmp(const char* a, const char* b)
 {
     while (*a && *b)
     {
-        // Digit runs → compare numerically
         if (isdigit((unsigned char)*a) && isdigit((unsigned char)*b))
         {
-            // Skip leading zeros
+            // Ignore leading zeroes, then compare the significant digit counts.
             while (*a == '0') a++;
             while (*b == '0') b++;
 
-            const char* da = a;
-            const char* db = b;
+            const char* digitsA = a;
+            const char* digitsB = b;
             while (isdigit((unsigned char)*a)) a++;
             while (isdigit((unsigned char)*b)) b++;
-            ptrdiff_t lenA = a - da;
-            ptrdiff_t lenB = b - db;
-            if (lenA != lenB) return lenA < lenB ? -1 : 1;
-            // Same length → compare digit-by-digit
-            while (da < a)
+
+            ptrdiff_t lengthA = a - digitsA;
+            ptrdiff_t lengthB = b - digitsB;
+            if (lengthA != lengthB) return lengthA < lengthB ? -1 : 1;
+            while (digitsA < a)
             {
-                if (*da != *db) return *da < *db ? -1 : 1;
-                da++; db++;
+                if (*digitsA != *digitsB) return *digitsA < *digitsB ? -1 : 1;
+                digitsA++;
+                digitsB++;
             }
             continue;
         }
 
-        // Special case: '_' sorts before '-' (Windows Explorer behaviour)
-        if ((*a == '_' && *b == '-') || (*a == '-' && *b == '_'))
-            return *a == '_' ? -1 : 1;
+        if (*a == '_' && *b != '_') return -1;
+        if (*b == '_' && *a != '_') return 1;
 
-        // Case-insensitive comparison for all other characters
-        unsigned char ca = (unsigned char)tolower((unsigned char)*a);
-        unsigned char cb = (unsigned char)tolower((unsigned char)*b);
-        if (ca != cb) return ca < cb ? -1 : 1;
-        a++; b++;
+        unsigned char charA = (unsigned char)tolower((unsigned char)*a);
+        unsigned char charB = (unsigned char)tolower((unsigned char)*b);
+        if (charA != charB) return charA < charB ? -1 : 1;
+        a++;
+        b++;
     }
     if (*a) return 1;
     if (*b) return -1;
     return 0;
+}
+
+#if defined(_WIN32)
+// Convert a complete UTF-8 filename to UTF-16. Typical names stay on the stack;
+// longer names use an exact-sized allocation instead of being truncated.
+static wchar_t* FilenameToWide(const char* text, wchar_t* stackBuffer, int stackCapacity)
+{
+    int required = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, NULL, 0);
+    if (required <= 0) return NULL;
+
+    wchar_t* output = stackBuffer;
+    if (required > stackCapacity)
+    {
+        output = malloc((size_t)required * sizeof(*output));
+        if (output == NULL) return NULL;
+    }
+
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, output, required) != required)
+    {
+        if (output != stackBuffer) free(output);
+        return NULL;
+    }
+    return output;
+}
+#endif
+
+// Case-insensitive natural filename comparison using Windows' locale collation.
+// Punctuation remains significant ("Rabbit_Run" sorts before "Rabbit2"), while
+// digit runs compare numerically ("file2" sorts before "file10").
+static int ExplorerStricmp(const char* a, const char* b)
+{
+#if defined(_WIN32)
+    enum { STACK_CAPACITY = 512 };
+    wchar_t stackA[STACK_CAPACITY];
+    wchar_t stackB[STACK_CAPACITY];
+    wchar_t* wideA = FilenameToWide(a, stackA, STACK_CAPACITY);
+    if (wideA == NULL) return NaturalStricmp(a, b);
+
+    wchar_t* wideB = FilenameToWide(b, stackB, STACK_CAPACITY);
+    if (wideB == NULL)
+    {
+        if (wideA != stackA) free(wideA);
+        return NaturalStricmp(a, b);
+    }
+
+    int result = CompareStringEx(NULL, NORM_IGNORECASE | SORT_DIGITSASNUMBERS,
+        wideA, -1, wideB, -1, NULL, NULL, 0);
+
+    if (wideA != stackA) free(wideA);
+    if (wideB != stackB) free(wideB);
+
+    if (result == CSTR_LESS_THAN) return -1;
+    if (result == CSTR_EQUAL) return 0;
+    if (result == CSTR_GREATER_THAN) return 1;
+#endif
+    return NaturalStricmp(a, b);
 }
 
 static float SRGBChannelToLinear(float value)
@@ -300,14 +367,14 @@ static void BuildFileList(ApplicationState* app, const char* currentFilePath)
         return;
     }
 
-    // Sort by filename (natural order, case-insensitive, matches Windows Explorer)
+    // Sort by filename using the platform's default locale collation (matches Windows Explorer)
     for (int i = 0; i < matchedCount - 1; i++)
     {
         for (int j = i + 1; j < matchedCount; j++)
         {
             const char* nameI = ExtractFilename(matched[i]);
             const char* nameJ = ExtractFilename(matched[j]);
-            if (NaturalStricmp(nameI, nameJ) > 0)
+            if (ExplorerStricmp(nameI, nameJ) > 0)
             {
                 char* tmp = matched[i];
                 matched[i] = matched[j];
