@@ -145,13 +145,19 @@ void TransformDataForwardKinematics(TransformData* data)
     }
 }
 
-float TransformDataGetMaxHeight(TransformData* data)
+// Vertical span of the pose, measured from its own lowest joint. Measuring the
+// span rather than the absolute world height keeps the result independent of
+// where the character sits, so an airborne pose still reports its actual size.
+float TransformDataGetVerticalExtent(TransformData* data)
 {
-    float height = 1e-8f;
-    for (int j = 0; j < data->jointCount; j++) {
-        height = Max(height, data->globalPositions[j].y);
+    if (data->jointCount <= 0) return 1e-8f;
+    float minY = data->globalPositions[0].y;
+    float maxY = minY;
+    for (int j = 1; j < data->jointCount; j++) {
+        minY = Min(minY, data->globalPositions[j].y);
+        maxY = Max(maxY, data->globalPositions[j].y);
     }
-    return height;
+    return Max(maxY - minY, 1e-8f);
 }
 
 // GLB exact sampling helpers (declared in glb_data.h, used here)

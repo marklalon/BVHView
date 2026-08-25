@@ -41,6 +41,6 @@ void TransformDataSampleRestPoseGLB(TransformData* data, GLBData* glb, float sca
 void TransformDataForwardKinematics(TransformData* data);
 
 // Utility
-float TransformDataGetMaxHeight(TransformData* data);
+float TransformDataGetVerticalExtent(TransformData* data);
 
 #endif // TRANSFORM_DATA_H

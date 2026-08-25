@@ -199,11 +199,25 @@ static bool LoadIntoSlot(CharacterData* data, int slot, const char* path, char* 
         }
         if (jointCount > 0)
         {
-            TransformDataSampleFrameGLB(&data->xformData[slot], glb, 0, 1.0f);
+            // Measure the character from its bind pose, not from animation frame 0.
+            // Frame 0 of a mid-air clip (a jump's middle/landing segment) puts the
+            // whole skeleton several metres up, which used to trip the centimetre
+            // heuristic below and render that clip 100x too small while other clips
+            // of the same rig came out correct. The bind pose is identical for every
+            // clip exported from one rig, so it keeps them consistent.
+            TransformDataSampleRestPoseGLB(&data->xformData[slot], glb, 1.0f);
             TransformDataForwardKinematics(&data->xformData[slot]);
-            float height = TransformDataGetMaxHeight(&data->xformData[slot]);
+            float height = TransformDataGetVerticalExtent(&data->xformData[slot]);
+            if (height <= 1e-4f)
+            {
+                // Degenerate/collapsed bind pose: fall back to the first frame.
+                TransformDataSampleFrameGLB(&data->xformData[slot], glb, 0, 1.0f);
+                TransformDataForwardKinematics(&data->xformData[slot]);
+                height = TransformDataGetVerticalExtent(&data->xformData[slot]);
+            }
             data->scales[slot] = height > 10.0f ? 0.01f : 1.0f;
             data->autoScales[slot] = 1.8f / height;
+            printf("INFO: Bind-pose height %.3f -> unit scale %.4f\n", height, data->scales[slot]);
             TransformDataSampleFrameGLB(&data->xformData[slot], glb, 0, data->scales[slot]);
             TransformDataForwardKinematics(&data->xformData[slot]);
         }
@@ -237,7 +251,9 @@ static bool LoadIntoSlot(CharacterData* data, int slot, const char* path, char* 
             {
                 TransformDataSampleFrame(&data->xformData[slot], &data->bvhData[slot], 0, 1.0f);
                 TransformDataForwardKinematics(&data->xformData[slot]);
-                float height = TransformDataGetMaxHeight(&data->xformData[slot]);
+                // Span from the pose's own lowest joint, so a clip that starts
+                // airborne is not mistaken for centimetre units.
+                float height = TransformDataGetVerticalExtent(&data->xformData[slot]);
                 data->scales[slot] = height > 10.0f ? 0.01f : 1.0f;
                 data->autoScales[slot] = 1.8f / height;
             }
@@ -246,7 +262,7 @@ static bool LoadIntoSlot(CharacterData* data, int slot, const char* path, char* 
                 // No motion data: compute rest pose from joint offsets
                 TransformDataSampleFrame(&data->xformData[slot], &data->bvhData[slot], 0, 1.0f);
                 TransformDataForwardKinematics(&data->xformData[slot]);
-                float height = TransformDataGetMaxHeight(&data->xformData[slot]);
+                float height = TransformDataGetVerticalExtent(&data->xformData[slot]);
                 data->scales[slot] = height > 10.0f ? 0.01f : 1.0f;
                 data->autoScales[slot] = (height > 0.0f) ? 1.8f / height : 1.0f;
             }
