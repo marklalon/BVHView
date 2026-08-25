@@ -317,7 +317,7 @@ static void GLBDataUpdateModelAnimationVertexBuffers(Model model)
     for (int meshIndex = 0; meshIndex < model.meshCount; meshIndex++)
     {
         Mesh* mesh = &model.meshes[meshIndex];
-        if (mesh->boneWeights == NULL || mesh->boneIndices == NULL || mesh->animVertices == NULL || mesh->animNormals == NULL) continue;
+        if (mesh->boneWeights == NULL || mesh->boneIndices == NULL || mesh->animVertices == NULL) continue;
         bool bufferUpdateRequired = false;
         int boneCounter = 0;
         int vertexValuesCount = mesh->vertexCount * 3;
@@ -341,7 +341,7 @@ static void GLBDataUpdateModelAnimationVertexBuffers(Model model)
                 mesh->animVertices[vertexIndex + 1] += animVertex.y * boneWeight;
                 mesh->animVertices[vertexIndex + 2] += animVertex.z * boneWeight;
                 bufferUpdateRequired = true;
-                if (mesh->normals != NULL)
+                if (mesh->normals != NULL && mesh->animNormals != NULL)
                 {
                     Vector3 animNormal = { mesh->normals[vertexIndex], mesh->normals[vertexIndex + 1], mesh->normals[vertexIndex + 2] };
                     animNormal = Vector3Transform(animNormal, MatrixTranspose(MatrixInvert(model.boneMatrices[boneIndex])));
@@ -354,7 +354,8 @@ static void GLBDataUpdateModelAnimationVertexBuffers(Model model)
         if (bufferUpdateRequired)
         {
             rlUpdateVertexBuffer(mesh->vboId[RL_DEFAULT_SHADER_ATTRIB_LOCATION_POSITION], mesh->animVertices, mesh->vertexCount * 3 * sizeof(float), 0);
-            if (mesh->normals != NULL) rlUpdateVertexBuffer(mesh->vboId[RL_DEFAULT_SHADER_ATTRIB_LOCATION_NORMAL], mesh->animNormals, mesh->vertexCount * 3 * sizeof(float), 0);
+            if (mesh->normals != NULL && mesh->animNormals != NULL)
+                rlUpdateVertexBuffer(mesh->vboId[RL_DEFAULT_SHADER_ATTRIB_LOCATION_NORMAL], mesh->animNormals, mesh->vertexCount * 3 * sizeof(float), 0);
         }
     }
 }
@@ -468,6 +469,111 @@ static void GLBDataUndoSkinnedMeshNodeTransforms(GLBData* data)
         printf("INFO: Removed baked node transforms from %d skinned GLB mesh primitives\n", correctedMeshCount);
 }
 
+static bool GLBPrimitiveHasSkinAttributes(const cgltf_primitive* primitive)
+{
+    if (primitive == NULL) return false;
+    for (cgltf_size attributeIndex = 0; attributeIndex < primitive->attributes_count; attributeIndex++)
+    {
+        cgltf_attribute_type type = primitive->attributes[attributeIndex].type;
+        if (type == cgltf_attribute_type_joints || type == cgltf_attribute_type_weights) return true;
+    }
+    return false;
+}
+
+static int GLBFindNearestAncestorJointIndex(const cgltf_skin* skin, const cgltf_node* node)
+{
+    for (const cgltf_node* ancestor = node; ancestor != NULL; ancestor = ancestor->parent)
+    {
+        int jointIndex = GLBFindSkinJointIndex(skin, ancestor);
+        if (jointIndex >= 0) return jointIndex;
+    }
+    return -1;
+}
+
+// raylib bakes each glTF node's bind-pose world transform into its mesh vertices.
+// Represent an unskinned mesh in a joint subtree as a 100%-weighted rigid mesh:
+// applying that joint's bind-to-current matrix then preserves every static local
+// transform between the joint and the mesh while making the whole object follow
+// the joint. raylib handles direct joint children itself; this pass also covers
+// meshes on joint nodes and meshes below intermediate attachment nodes.
+static bool GLBDataBindRigidAttachments(GLBData* data)
+{
+    if (data->sourceData == NULL || data->sourceSkin == NULL || data->model.meshes == NULL) return true;
+
+    int meshIndex = 0;
+    int attachmentCount = 0;
+    for (cgltf_size nodeIndex = 0; nodeIndex < data->sourceData->nodes_count; nodeIndex++)
+    {
+        cgltf_node* node = &data->sourceData->nodes[nodeIndex];
+        if (node->mesh == NULL) continue;
+
+        int jointIndex = (node->skin == NULL)
+            ? GLBFindNearestAncestorJointIndex(data->sourceSkin, node)
+            : -1;
+        for (cgltf_size primitiveIndex = 0; primitiveIndex < node->mesh->primitives_count; primitiveIndex++)
+        {
+            cgltf_primitive* primitive = &node->mesh->primitives[primitiveIndex];
+            if (primitive->type != cgltf_primitive_type_triangles) continue;
+            if (meshIndex >= data->model.meshCount)
+            {
+                printf("WARN: GLB mesh/node mapping ended early while binding rigid attachments\n");
+                return true;
+            }
+
+            Mesh* mesh = &data->model.meshes[meshIndex++];
+            if (jointIndex < 0 || GLBPrimitiveHasSkinAttributes(primitive)) continue;
+            if (jointIndex > UCHAR_MAX)
+            {
+                printf("WARN: Rigid GLB attachment joint index %d exceeds the supported limit\n", jointIndex);
+                continue;
+            }
+
+            if (mesh->boneIndices == NULL)
+                mesh->boneIndices = (unsigned char*)calloc((size_t)mesh->vertexCount * 4, sizeof(unsigned char));
+            if (mesh->boneWeights == NULL)
+                mesh->boneWeights = (float*)calloc((size_t)mesh->vertexCount * 4, sizeof(float));
+            if (mesh->animVertices == NULL && mesh->vertices != NULL)
+            {
+                mesh->animVertices = (float*)malloc((size_t)mesh->vertexCount * 3 * sizeof(float));
+                if (mesh->animVertices != NULL)
+                    memcpy(mesh->animVertices, mesh->vertices, (size_t)mesh->vertexCount * 3 * sizeof(float));
+            }
+            if (mesh->animNormals == NULL && mesh->normals != NULL)
+            {
+                mesh->animNormals = (float*)malloc((size_t)mesh->vertexCount * 3 * sizeof(float));
+                if (mesh->animNormals != NULL)
+                    memcpy(mesh->animNormals, mesh->normals, (size_t)mesh->vertexCount * 3 * sizeof(float));
+            }
+            if (mesh->boneIndices == NULL || mesh->boneWeights == NULL || mesh->animVertices == NULL ||
+                (mesh->normals != NULL && mesh->animNormals == NULL))
+            {
+                printf("WARN: Out of memory while binding a rigid GLB attachment\n");
+                return false;
+            }
+
+            memset(mesh->boneIndices, 0, (size_t)mesh->vertexCount * 4 * sizeof(unsigned char));
+            memset(mesh->boneWeights, 0, (size_t)mesh->vertexCount * 4 * sizeof(float));
+            for (int vertexIndex = 0; vertexIndex < mesh->vertexCount; vertexIndex++)
+            {
+                mesh->boneIndices[vertexIndex * 4] = (unsigned char)jointIndex;
+                mesh->boneWeights[vertexIndex * 4] = 1.0f;
+            }
+            mesh->boneCount = data->model.skeleton.boneCount;
+            attachmentCount++;
+        }
+    }
+
+    if (meshIndex != data->model.meshCount)
+    {
+        printf("WARN: GLB mesh/node mapping mismatch while binding rigid attachments (%d/%d)\n",
+            meshIndex, data->model.meshCount);
+        return true;
+    }
+    if (attachmentCount > 0)
+        printf("INFO: Bound %d rigid GLB mesh primitives to ancestor joints\n", attachmentCount);
+    return true;
+}
+
 Matrix GLBDataGetModelTransform(const GLBData* glb, float scale, bool inplace)
 {
     Matrix transform = MatrixScale(scale, scale, scale);
@@ -578,10 +684,10 @@ static bool GLBAnimationTargetsSkinJoint(const cgltf_skin* skin, const cgltf_nod
     return false;
 }
 
-static bool GLBDataLoadSourceTiming(GLBData* data, const char* filename)
+static bool GLBDataLoadSource(GLBData* data, const char* filename)
 {
     // Always parse the source GLTF data to obtain skeleton skin, rest pose, and
-    // material information — even when animCount == 0 (static model preview).
+    // material information — even when there are no animations (static preview).
     cgltf_options options = { 0 };
     cgltf_result result = cgltf_parse_file(&options, filename, &data->sourceData);
     if (result != cgltf_result_success) { printf("WARN: Failed to parse GLB source data for '%s'\n", filename); return false; }
@@ -607,13 +713,49 @@ static bool GLBDataLoadSourceTiming(GLBData* data, const char* filename)
         }
     }
 
+    return true;
+}
+
+static bool GLBAnimationInputWasScanned(const cgltf_animation* anim, cgltf_size channelIndex,
+    const cgltf_accessor* input, const cgltf_skin* skin)
+{
+    for (cgltf_size previousIndex = 0; previousIndex < channelIndex; previousIndex++)
+    {
+        const cgltf_animation_channel* previous = &anim->channels[previousIndex];
+        if (skin != NULL && !GLBAnimationTargetsSkinJoint(skin, previous->target_node)) continue;
+        if (previous->sampler != NULL && previous->sampler->input == input) return true;
+    }
+    return false;
+}
+
+// The viewer samples cgltf curves directly during playback. Keep only the tiny
+// ModelAnimation name records required by the GUI instead of asking raylib to
+// bake every animation at 60 fps into keyframeCount * boneCount transforms.
+static bool GLBDataInitSourceAnimations(GLBData* data)
+{
+    if (data->sourceData == NULL || data->sourceSkin == NULL || data->model.skeleton.boneCount <= 0) return true;
+    if (data->sourceData->animations_count > INT_MAX) return false;
+
+    data->animCount = (int)data->sourceData->animations_count;
     if (data->animCount <= 0) return true;
 
+    data->animations = (ModelAnimation*)calloc((size_t)data->animCount, sizeof(ModelAnimation));
+    data->sourceFrameCounts = (int*)calloc((size_t)data->animCount, sizeof(int));
+    data->sourceFrameTimes = (float*)calloc((size_t)data->animCount, sizeof(float));
+    data->sourceDurations = (float*)calloc((size_t)data->animCount, sizeof(float));
+    if (data->animations == NULL || data->sourceFrameCounts == NULL ||
+        data->sourceFrameTimes == NULL || data->sourceDurations == NULL) return false;
+
     const cgltf_skin* skin = data->sourceSkin;
-    int parsedAnimCount = (data->animCount < (int)data->sourceData->animations_count) ? data->animCount : (int)data->sourceData->animations_count;
-    for (int a = 0; a < parsedAnimCount; a++)
+    for (int a = 0; a < data->animCount; a++)
     {
         cgltf_animation* anim = &data->sourceData->animations[a];
+        data->animations[a].boneCount = data->model.skeleton.boneCount;
+        // keyframeCount intentionally remains zero: UnloadModelAnimations can
+        // safely free these metadata-only records without frame-pose storage.
+        if (anim->name != NULL)
+            strncpy(data->animations[a].name, anim->name, sizeof(data->animations[a].name) - 1);
+
         float duration = 0.0f;
         float minDelta = FLT_MAX;
         int maxInputCount = 0;
@@ -622,33 +764,72 @@ static bool GLBDataLoadSourceTiming(GLBData* data, const char* filename)
         {
             cgltf_animation_channel* channel = &anim->channels[channelIdx];
             cgltf_animation_sampler* sampler = channel->sampler;
-            if (skin != NULL && !GLBAnimationTargetsSkinJoint(skin, channel->target_node)) continue;
+            if (!GLBAnimationTargetsSkinJoint(skin, channel->target_node)) continue;
             if (sampler == NULL || sampler->input == NULL || sampler->input->count == 0) continue;
-            int inputCount = (int)sampler->input->count;
-            if (inputCount > maxInputCount) maxInputCount = inputCount;
+            if (GLBAnimationInputWasScanned(anim, channelIdx, sampler->input, skin)) continue;
+
+            cgltf_size inputCount = sampler->input->count;
+            if (inputCount > (cgltf_size)maxInputCount)
+                maxInputCount = inputCount > INT_MAX ? INT_MAX : (int)inputCount;
             float prevTime = 0.0f;
             bool hasPrevTime = false;
-            for (int sampleIdx = 0; sampleIdx < inputCount; sampleIdx++)
+            for (cgltf_size sampleIdx = 0; sampleIdx < inputCount; sampleIdx++)
             {
                 float time = 0.0f;
                 if (!cgltf_accessor_read_float(sampler->input, sampleIdx, &time, 1)) break;
                 hasTimeSamples = true;
                 if (time > duration) duration = time;
-                if (hasPrevTime) { float delta = time - prevTime; if (delta > 1e-6f && delta < minDelta) minDelta = delta; }
+                if (hasPrevTime)
+                {
+                    float delta = time - prevTime;
+                    if (delta > 1e-6f && delta < minDelta) minDelta = delta;
+                }
                 prevTime = time;
                 hasPrevTime = true;
             }
         }
-        if (!hasTimeSamples) continue;
-        int frameCount = maxInputCount > 0 ? maxInputCount : 1;
+
+        int frameCount = 1;
         float frameTime = data->frameTime;
-        if (minDelta < FLT_MAX) { frameTime = minDelta; frameCount = 1 + (int)(duration / frameTime + 0.5f); }
-        else if (frameCount > 1 && duration > 0.0f) { frameTime = duration / (float)(frameCount - 1); }
+        if (hasTimeSamples)
+        {
+            frameCount = maxInputCount > 0 ? maxInputCount : 1;
+            if (minDelta < FLT_MAX)
+            {
+                double estimatedCount = 1.0 + floor((double)duration / (double)minDelta + 0.5);
+                frameCount = estimatedCount > INT_MAX ? INT_MAX : (int)estimatedCount;
+                frameTime = minDelta;
+            }
+            else if (frameCount > 1 && duration > 0.0f)
+            {
+                frameTime = duration / (float)(frameCount - 1);
+            }
+        }
         if (frameCount < 1) frameCount = 1;
         if (frameTime <= 0.0f) frameTime = data->frameTime;
         data->sourceFrameCounts[a] = frameCount;
         data->sourceFrameTimes[a] = frameTime;
         data->sourceDurations[a] = duration;
+    }
+    return true;
+}
+
+static bool GLBDataLoadBakedAnimationFallback(GLBData* data, const char* filename)
+{
+    data->animations = LoadModelAnimations(filename, &data->animCount);
+    if (data->animCount <= 0) return true;
+
+    data->sourceFrameCounts = (int*)malloc((size_t)data->animCount * sizeof(int));
+    data->sourceFrameTimes = (float*)malloc((size_t)data->animCount * sizeof(float));
+    data->sourceDurations = (float*)malloc((size_t)data->animCount * sizeof(float));
+    if (data->animations == NULL || data->sourceFrameCounts == NULL ||
+        data->sourceFrameTimes == NULL || data->sourceDurations == NULL) return false;
+
+    for (int a = 0; a < data->animCount; a++)
+    {
+        data->sourceFrameCounts[a] = data->animations[a].keyframeCount;
+        data->sourceFrameTimes[a] = data->frameTime;
+        data->sourceDurations[a] = (data->animations[a].keyframeCount - 1) * data->frameTime;
     }
     return true;
 }
@@ -681,6 +862,7 @@ void ComputeTopoOrder(int boneCount, BoneInfo* bones, int* topoOrder, int* invTo
 bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSize)
 {
     printf("INFO: Loading GLB '%s'\n", filename);
+    double loadStartTime = GetTime();
     const char* ext = strrchr(filename, '.');
     if (ext == NULL || (strcmp(ext, ".glb") != 0 && strcmp(ext, ".GLB") != 0 && strcmp(ext, ".gltf") != 0 && strcmp(ext, ".GLTF") != 0))
     { snprintf(errMsg, errMsgSize, "Error: File '%s' is not a .glb/.gltf file", filename); return false; }
@@ -689,14 +871,49 @@ bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSi
     // A file with neither bones nor a mesh has nothing to display.
     if (bc == 0 && data->model.meshCount == 0)
     { snprintf(errMsg, errMsgSize, "Error: Model '%s' has no skeleton and no mesh", filename); printf("ERROR: %s\n", errMsg); return false; }
-    data->animations = LoadModelAnimations(filename, &data->animCount);
     data->activeAnim = 0;
     data->frameTime = 1.0f / 60.0f;
+
+    if (bc > 0)
+    {
+        data->sourceRestPose = (Transform*)malloc((size_t)bc * sizeof(Transform));
+        data->sourceLocalPose = (Transform*)malloc((size_t)bc * sizeof(Transform));
+        data->sourceGlobalPose = (Transform*)malloc((size_t)bc * sizeof(Transform));
+        data->sourceRootPose = (Transform*)malloc((size_t)bc * sizeof(Transform));
+        if (data->sourceRestPose == NULL || data->sourceLocalPose == NULL ||
+            data->sourceGlobalPose == NULL || data->sourceRootPose == NULL)
+        {
+            GLBDataFree(data);
+            snprintf(errMsg, errMsgSize, "Error: Out of memory while loading animation data for '%s'", filename);
+            printf("ERROR: %s\n", errMsg);
+            return false;
+        }
+    }
+
+    bool sourceLoaded = GLBDataLoadSource(data, filename);
+    if (bc > 0)
+    {
+        bool animationDataReady = false;
+        if (sourceLoaded && data->sourceSkin != NULL)
+            animationDataReady = GLBDataInitSourceAnimations(data);
+        else
+        {
+            printf("WARN: Source animation curves unavailable for '%s'; using baked animation fallback\n", filename);
+            animationDataReady = GLBDataLoadBakedAnimationFallback(data, filename);
+        }
+        if (!animationDataReady)
+        {
+            GLBDataFree(data);
+            snprintf(errMsg, errMsgSize, "Error: Out of memory while loading animations for '%s'", filename);
+            printf("ERROR: %s\n", errMsg);
+            return false;
+        }
+    }
+
     // Mesh-only models (no skeleton) are supported for static mesh preview: skip all
     // skeleton/animation setup and fall through to material/texture loading below.
     if (bc == 0)
     {
-        if (data->animations != NULL) { UnloadModelAnimations(data->animations, data->animCount); data->animations = NULL; }
         data->animCount = 0;
         printf("INFO: GLB '%s' has no skeleton - loading as mesh-only preview\n", filename);
 
@@ -721,26 +938,6 @@ bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSi
                 printf("INFO: Mesh ground offset %.3f (world min Y = %.3f)\n", data->meshGroundOffset, worldMinY);
         }
     }
-    else
-    {
-        // Allow loading models without animations (static preview in rest pose)
-        if (data->animCount > 0)
-        {
-            data->sourceFrameCounts = (int*)malloc(data->animCount * sizeof(int));
-            data->sourceFrameTimes = (float*)malloc(data->animCount * sizeof(float));
-            data->sourceDurations = (float*)malloc(data->animCount * sizeof(float));
-        }
-        data->sourceRestPose = (Transform*)malloc(bc * sizeof(Transform));
-        data->sourceLocalPose = (Transform*)malloc(bc * sizeof(Transform));
-        data->sourceGlobalPose = (Transform*)malloc(bc * sizeof(Transform));
-        data->sourceRootPose = (Transform*)malloc(bc * sizeof(Transform));
-        if (data->sourceRestPose == NULL || data->sourceLocalPose == NULL || data->sourceGlobalPose == NULL || data->sourceRootPose == NULL
-            || (data->animCount > 0 && (data->sourceFrameCounts == NULL || data->sourceFrameTimes == NULL || data->sourceDurations == NULL)))
-        { GLBDataFree(data); snprintf(errMsg, errMsgSize, "Error: Out of memory while loading animation timing for '%s'", filename); printf("ERROR: %s\n", errMsg); return false; }
-        for (int a = 0; a < data->animCount; a++)
-        { data->sourceFrameCounts[a] = data->animations[a].keyframeCount; data->sourceFrameTimes[a] = data->frameTime; data->sourceDurations[a] = (data->animations[a].keyframeCount - 1) * data->frameTime; }
-    }
-    GLBDataLoadSourceTiming(data, filename);
 
     // Parse per-material alpha info from GLTF materials
     if (data->sourceData != NULL && data->model.materialCount > 0)
@@ -810,6 +1007,13 @@ bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSi
         }
     }
 
+    if (!GLBDataBindRigidAttachments(data))
+    {
+        GLBDataFree(data);
+        snprintf(errMsg, errMsgSize, "Error: Failed to bind rigid attachments in '%s'", filename);
+        printf("ERROR: %s\n", errMsg);
+        return false;
+    }
     GLBDataUndoSkinnedMeshNodeTransforms(data);
     // Reload all core PBR maps through the local decoder. This keeps embedded,
     // external and EXT_texture_webp images on the same material path.
@@ -867,6 +1071,8 @@ bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSi
         data->invTopoOrder = (int*)malloc(bc * sizeof(int));
         ComputeTopoOrder(bc, data->model.skeleton.bones, data->topoOrder, data->invTopoOrder);
     }
-    printf("INFO: Loaded '%s' - %d bones, %d animations\n", filename, bc, data->animCount);
+    printf("INFO: Loaded '%s' - %d bones, %d animations in %.3f s\n",
+        filename, bc, data->animCount, GetTime() - loadStartTime);
+    fflush(stdout);
     return true;
 }
