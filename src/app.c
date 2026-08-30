@@ -138,6 +138,13 @@ static int ExplorerStricmp(const char* a, const char* b)
     return NaturalStricmp(a, b);
 }
 
+static int CompareFilePathsByFilename(const void* left, const void* right)
+{
+    const char* pathLeft = *(const char* const*)left;
+    const char* pathRight = *(const char* const*)right;
+    return ExplorerStricmp(ExtractFilename(pathLeft), ExtractFilename(pathRight));
+}
+
 static float SRGBChannelToLinear(float value)
 {
     return value <= 0.04045f ? value / 12.92f : powf((value + 0.055f) / 1.055f, 2.4f);
@@ -297,6 +304,7 @@ void ApplicationCleanup(ApplicationState* app)
 // Skips scanning if the directory hasn't changed since the last call.
 static void BuildFileList(ApplicationState* app, const char* currentFilePath)
 {
+    double buildStartTime = GetTime();
     char dir[512];
     ExtractDirectory(currentFilePath, dir, sizeof(dir));
 
@@ -332,6 +340,7 @@ static void BuildFileList(ApplicationState* app, const char* currentFilePath)
 
     // Scan directory
     FilePathList files = LoadDirectoryFiles(dir);
+    int directoryEntryCount = (int)files.count;
     if (files.count <= 0)
     {
         UnloadDirectoryFiles(files);
@@ -358,6 +367,7 @@ static void BuildFileList(ApplicationState* app, const char* currentFilePath)
     }
 
     UnloadDirectoryFiles(files);
+    double scanFinishedTime = GetTime();
 
     if (matchedCount <= 1)
     {
@@ -367,21 +377,10 @@ static void BuildFileList(ApplicationState* app, const char* currentFilePath)
         return;
     }
 
-    // Sort by filename using the platform's default locale collation (matches Windows Explorer)
-    for (int i = 0; i < matchedCount - 1; i++)
-    {
-        for (int j = i + 1; j < matchedCount; j++)
-        {
-            const char* nameI = ExtractFilename(matched[i]);
-            const char* nameJ = ExtractFilename(matched[j]);
-            if (ExplorerStricmp(nameI, nameJ) > 0)
-            {
-                char* tmp = matched[i];
-                matched[i] = matched[j];
-                matched[j] = tmp;
-            }
-        }
-    }
+    // Sort by filename using the platform's default locale collation (matches
+    // Windows Explorer). qsort keeps this O(n log n) for large directories.
+    qsort(matched, (size_t)matchedCount, sizeof(matched[0]), CompareFilePathsByFilename);
+    double sortFinishedTime = GetTime();
 
     // Transfer to app->fileList and find current index
     for (int i = 0; i < matchedCount; i++)
@@ -392,9 +391,13 @@ static void BuildFileList(ApplicationState* app, const char* currentFilePath)
     }
     app->fileListCount = matchedCount;
 
-    // Build prefix-based groups from sorted file list
+    // Build prefix-based groups from sorted file list.
     // Files are already sorted by filename, so same-prefix files are adjacent.
-    // Prefix = part of filename (without extension) before the first '_'.
+    // Prefix = the filename (without extension) with its trailing action/variant
+    // segments removed: truncate at the second-to-last '_' when there are at
+    // least two underscores, otherwise at the only '_' (for example,
+    // "Walk_01" -> "Walk", "Alligator_DeadUp_1" -> "Alligator",
+    // "FEP_MagmaDemon_Attack01_1" -> "FEP_MagmaDemon").
     app->groupCount = 0;
     app->currentGroupIndex = 0;
 
@@ -406,8 +409,19 @@ static void BuildFileList(ApplicationState* app, const char* currentFilePath)
         char* dot = strrchr(nameNoExt, '.');
         if (dot) *dot = '\0';
 
-        char* underscore = strchr(nameNoExt, '_');
-        if (underscore) *underscore = '\0';
+        char* lastUnderscore = strrchr(nameNoExt, '_');
+        if (lastUnderscore)
+        {
+            char* secondToLast = NULL;
+            for (char* p = lastUnderscore - 1; p > nameNoExt; p--)
+            {
+                if (*p == '_') { secondToLast = p; break; }
+            }
+            if (secondToLast)
+                *secondToLast = '\0';
+            else
+                *lastUnderscore = '\0';
+        }
 
         // Check if this prefix starts a new group
         if (app->groupCount == 0 || strcmp(nameNoExt, app->groupNames[app->groupCount - 1]) != 0)
@@ -427,12 +441,44 @@ static void BuildFileList(ApplicationState* app, const char* currentFilePath)
             break;
         }
     }
+
+    double buildFinishedTime = GetTime();
+    printf("INFO: Indexed %d/%d animation files into %d groups "
+           "(scan %.3f s, sort %.3f s, group %.3f s, total %.3f s)\n",
+           matchedCount, directoryEntryCount, app->groupCount,
+           scanFinishedTime - buildStartTime,
+           sortFinishedTime - scanFinishedTime,
+           buildFinishedTime - sortFinishedTime,
+           buildFinishedTime - buildStartTime);
+    fflush(stdout);
 }
 
-// Common post-load initialization: set active, update capsules, scrubber, window title, build file list
+// Common post-load initialization. Directory indexing is intentionally deferred
+// until the user first requests file navigation.
 void OnFileLoaded(ApplicationState* app)
 {
     app->characterData.active = app->characterData.count - 1;
+
+    // Keep an existing directory index only when it contains the loaded file.
+    // This preserves the cache during keyboard navigation while preventing a
+    // newly opened file from inheriting stale index and title information.
+    bool cachedFileFound = false;
+    for (int i = 0; i < app->fileListCount; i++)
+    {
+        if (strcmp(app->fileList[i], app->characterData.filePaths[app->characterData.active]) == 0)
+        {
+            app->fileListIndex = i;
+            cachedFileFound = true;
+            break;
+        }
+    }
+    if (app->fileListCount > 0 && !cachedFileFound)
+    {
+        FreeFileList(app);
+        app->fileListIndex = 0;
+        app->lastScannedDir[0] = '\0';
+    }
+
     if (!app->firstFileLoaded)
     {
         if (app->characterData.hasSkinnedMesh)
@@ -449,9 +495,6 @@ void OnFileLoaded(ApplicationState* app)
     // Auto-play animation unless user explicitly paused
     if (!app->scrubberSettings.userPaused && ScrubberHasValidAnimation(&app->characterData, app->characterData.active))
         app->scrubberSettings.playing = true;
-
-    // Build file list first so we know the count/index for the title suffix
-    BuildFileList(app, app->characterData.filePaths[app->characterData.active]);
 
     char windowTitle[600];
     if (app->fileListCount > 1)
@@ -695,8 +738,9 @@ void ApplicationUpdate(void* voidApplicationState)
         }
     }
 
-    // PageUp/PageDown: switch to previous/next group (jump to first file of each group, repeat when held)
-    if (!app->fileDialogState.windowActive && app->groupCount > 1)
+    // PageUp/PageDown: lazily index the directory, then switch to the
+    // previous/next group (jump to its first file, repeat when held).
+    if (!app->fileDialogState.windowActive && app->characterData.count > 0)
     {
         static KeyRepeatState repeatState = { -1, 0.0, 0 };
 
@@ -709,29 +753,35 @@ void ApplicationUpdate(void* voidApplicationState)
         {
             if (KeyRepeatShouldFire(&repeatState, currentKey))
             {
-                int targetGroup = (app->currentGroupIndex + direction + app->groupCount) % app->groupCount;
-                int targetIndex = app->groupStartIndex[targetGroup];
+                int activeSlot = app->characterData.active;
+                BuildFileList(app, app->characterData.filePaths[activeSlot]);
 
-                // Save the absolute camera view before switching.
-                app->savedCamPos = app->camera.cam3d.position;
-                app->savedCamTarget = app->camera.cam3d.target;
-                app->restoreCameraAfterSwitch = true;
+                if (app->groupCount > 1)
+                {
+                    int targetGroup = (app->currentGroupIndex + direction + app->groupCount) % app->groupCount;
+                    int targetIndex = app->groupStartIndex[targetGroup];
 
-                CharacterDataFree(&app->characterData);
-                if (CharacterDataLoadFromFile(&app->characterData, app->fileList[targetIndex], app->errMsg, 512))
-                {
-                    app->fileListIndex = targetIndex;
-                    app->currentGroupIndex = targetGroup;
-                    OnFileLoaded(app);
-                }
-                else
-                {
-                    // Fallback: restore current file
-                    app->restoreCameraAfterSwitch = false;
+                    // Save the absolute camera view before switching.
+                    app->savedCamPos = app->camera.cam3d.position;
+                    app->savedCamTarget = app->camera.cam3d.target;
+                    app->restoreCameraAfterSwitch = true;
+
                     CharacterDataFree(&app->characterData);
-                    int startIndex = app->fileListIndex;
-                    if (CharacterDataLoadFromFile(&app->characterData, app->fileList[startIndex], app->errMsg, 512))
+                    if (CharacterDataLoadFromFile(&app->characterData, app->fileList[targetIndex], app->errMsg, 512))
+                    {
+                        app->fileListIndex = targetIndex;
+                        app->currentGroupIndex = targetGroup;
                         OnFileLoaded(app);
+                    }
+                    else
+                    {
+                        // Fallback: restore current file
+                        app->restoreCameraAfterSwitch = false;
+                        CharacterDataFree(&app->characterData);
+                        int startIndex = app->fileListIndex;
+                        if (CharacterDataLoadFromFile(&app->characterData, app->fileList[startIndex], app->errMsg, 512))
+                            OnFileLoaded(app);
+                    }
                 }
             }
         }

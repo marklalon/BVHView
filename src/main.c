@@ -392,6 +392,8 @@ int main(int argc, char** argv)
     app.fileListCount = 0;
     app.fileListIndex = 0;
     app.lastScannedDir[0] = '\0';
+    app.groupCount = 0;
+    app.currentGroupIndex = 0;
     app.restoreCameraAfterSwitch = false;
 
     for (int i = 1; i < argc; i++)

@@ -59,13 +59,14 @@ typedef struct ApplicationState {
     GuiWindowFileDialogState fileDialogState;
     char errMsg[512];
 
-    // ArrowUp/Down file switching, PageUp/Down group switching
+    // Lazily built index for Left/Right file and PageUp/Down group switching
     char* fileList[4096];
     int fileListCount;
     int fileListIndex;
     char lastScannedDir[512];
 
-    // Prefix-based grouping (split filename on '_', first segment = group)
+    // Prefix-based grouping (filename without its trailing action/variant
+    // segments = group; e.g. "Alligator_DeadUp_1" -> "Alligator")
     char* groupNames[4096];
     int groupCount;
     int groupStartIndex[4096];
