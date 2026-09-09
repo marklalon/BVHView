@@ -393,11 +393,12 @@ static void BuildFileList(ApplicationState* app, const char* currentFilePath)
 
     // Build prefix-based groups from sorted file list.
     // Files are already sorted by filename, so same-prefix files are adjacent.
-    // Prefix = the filename (without extension) with its trailing action/variant
-    // segments removed: truncate at the second-to-last '_' when there are at
-    // least two underscores, otherwise at the only '_' (for example,
-    // "Walk_01" -> "Walk", "Alligator_DeadUp_1" -> "Alligator",
-    // "FEP_MagmaDemon_Attack01_1" -> "FEP_MagmaDemon").
+    // Prefix = the filename (without extension) with its trailing action
+    // removed. If the filename ends in a numeric variant, remove that first,
+    // then remove the action (for example, "Walk_01" -> "Walk",
+    // "Alligator_DeadUp_1" -> "Alligator",
+    // "FEP_MagmaDemon_Attack01_1" -> "FEP_MagmaDemon", and
+    // "MU04_GolemFire_SpinAttackLoop" -> "MU04_GolemFire").
     app->groupCount = 0;
     app->currentGroupIndex = 0;
 
@@ -412,15 +413,20 @@ static void BuildFileList(ApplicationState* app, const char* currentFilePath)
         char* lastUnderscore = strrchr(nameNoExt, '_');
         if (lastUnderscore)
         {
-            char* secondToLast = NULL;
-            for (char* p = lastUnderscore - 1; p > nameNoExt; p--)
+            bool hasNumericVariant = lastUnderscore[1] != '\0';
+            for (char* p = lastUnderscore + 1; hasNumericVariant && *p != '\0'; p++)
             {
-                if (*p == '_') { secondToLast = p; break; }
+                if (!isdigit((unsigned char)*p)) hasNumericVariant = false;
             }
-            if (secondToLast)
-                *secondToLast = '\0';
-            else
-                *lastUnderscore = '\0';
+
+            *lastUnderscore = '\0';
+            if (hasNumericVariant)
+            {
+                // A numeric suffix is only a variant of the preceding action.
+                // Remove that action too, when one is present.
+                lastUnderscore = strrchr(nameNoExt, '_');
+                if (lastUnderscore) *lastUnderscore = '\0';
+            }
         }
 
         // Check if this prefix starts a new group

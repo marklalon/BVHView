@@ -65,8 +65,9 @@ typedef struct ApplicationState {
     int fileListIndex;
     char lastScannedDir[512];
 
-    // Prefix-based grouping (filename without its trailing action/variant
-    // segments = group; e.g. "Alligator_DeadUp_1" -> "Alligator")
+    // Prefix-based grouping (filename without its trailing action and optional
+    // numeric variant = group; e.g. "MU04_GolemFire_SpinAttackLoop" ->
+    // "MU04_GolemFire")
     char* groupNames[4096];
     int groupCount;
     int groupStartIndex[4096];
