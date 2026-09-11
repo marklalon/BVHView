@@ -27,8 +27,6 @@ typedef struct ScrubberSettings {
     int frameMax;
     int frameMinSelect;
     int frameMaxSelect;
-    bool frameMinEdit;
-    bool frameMaxEdit;
     float timeMin;
     float timeMax;
 } ScrubberSettings;

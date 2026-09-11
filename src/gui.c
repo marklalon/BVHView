@@ -697,6 +697,140 @@ void GuiCharacterData(CharacterData* characterData, GuiWindowFileDialogState* fi
     }
 }
 
+//--------------------------------------------------------------------
+// Value box with select-all-on-focus
+//--------------------------------------------------------------------
+// raygui's GuiValueBox appends typed digits to the current value and has no
+// concept of a text selection, so retyping "120" means erasing it digit by
+// digit. This variant behaves like a regular text field instead: focusing the
+// box selects the whole value, so the first character typed replaces it.
+
+#define GUI_VALUEBOX_SELECT_MAX_CHARS 12
+
+typedef struct GuiValueBoxSelectState {
+    char text[GUI_VALUEBOX_SELECT_MAX_CHARS + 1];   // text shown while editing
+    bool editing;                                   // box owns the keyboard
+    bool selectAll;                                 // whole text is selected
+} GuiValueBoxSelectState;
+
+// Draw an integer value box and edit it in place (raygui VALUEBOX styling:
+// centred value, label drawn to the left of the box).
+// Returns 1 when an edit is committed (Enter, or a click outside the box).
+static int GuiValueBoxSelect(Rectangle bounds, const char* label, int* value, int minValue, int maxValue, GuiValueBoxSelectState* state)
+{
+    int result = 0;
+    float fontSize = (float)GuiGetStyle(DEFAULT, TEXT_SIZE);
+    float textSpacing = (float)GuiGetStyle(DEFAULT, TEXT_SPACING);
+    int borderWidth = GuiGetStyle(VALUEBOX, BORDER_WIDTH);
+    bool canInteract = !GuiIsLocked();
+    Vector2 mousePoint = GetMousePosition();
+    bool hovered = CheckCollisionPointRec(mousePoint, bounds);
+    bool clicked = canInteract && hovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+
+    if (!state->editing)
+    {
+        *value = ClampInt(*value, minValue, maxValue);
+        snprintf(state->text, sizeof(state->text), "%i", *value);
+
+        if (clicked)
+        {
+            state->editing = true;
+            state->selectAll = true;    // focus selects the whole value
+        }
+    }
+    else if (canInteract)
+    {
+        if (clicked) state->selectAll = true;   // clicking the focused box selects everything again
+
+        int keyCount = (int)strlen(state->text);
+
+        // Backspace/Delete clears the selection, or the last character
+        if (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressed(KEY_DELETE))
+        {
+            if (state->selectAll)
+            {
+                state->text[0] = '\0';
+                keyCount = 0;
+                state->selectAll = false;
+            }
+            else if (keyCount > 0)
+            {
+                state->text[--keyCount] = '\0';
+            }
+        }
+
+        // Typed digits replace the selection, otherwise they are appended
+        for (int codepoint = GetCharPressed(); codepoint > 0; codepoint = GetCharPressed())
+        {
+            if ((codepoint < '0') || (codepoint > '9')) continue;
+
+            if (state->selectAll)
+            {
+                state->text[0] = '\0';
+                keyCount = 0;
+                state->selectAll = false;
+            }
+            if (keyCount < GUI_VALUEBOX_SELECT_MAX_CHARS)
+            {
+                state->text[keyCount++] = (char)codepoint;
+                state->text[keyCount] = '\0';
+            }
+        }
+
+        // Commit on Enter or Tab, or when clicking anywhere outside the box
+        // (Tab also cycles the active character, so an edit must not stay pending)
+        if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER) || IsKeyPressed(KEY_TAB) ||
+            (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !hovered))
+        {
+            *value = ClampInt((keyCount > 0) ? TextToInteger(state->text) : 0, minValue, maxValue);
+            state->editing = false;
+            state->selectAll = false;
+            result = 1;
+        }
+    }
+
+    // Draw control (0 = normal, 1 = focused, 2 = pressed, as raygui styles them)
+    int style = state->editing ? 2 : (hovered ? 1 : 0);
+    Color baseColor = state->editing ? GetColor(GuiGetStyle(VALUEBOX, BASE_COLOR_PRESSED)) : BLANK;
+    Color borderColor = GetColor(GuiGetStyle(VALUEBOX, BORDER_COLOR_NORMAL + style * 3));
+    Color textColor = GetColor(GuiGetStyle(VALUEBOX, TEXT_COLOR_NORMAL + style * 3));
+
+    DrawRectangleRec(bounds, baseColor);
+    DrawRectangleLinesEx(bounds, (float)borderWidth, borderColor);
+
+    Vector2 textSize = MeasureTextEx(GuiGetFont(), state->text, fontSize, textSpacing);
+    Vector2 textPosition = { bounds.x + bounds.width / 2 - textSize.x / 2, bounds.y + bounds.height / 2 - fontSize / 2 };
+
+    if (state->editing && state->selectAll && (state->text[0] != '\0'))
+    {
+        // Selected text: highlight bar with the box colour used for the glyphs
+        DrawRectangleRec((Rectangle){ textPosition.x - 2.0f, bounds.y + borderWidth + 1.0f,
+            textSize.x + 4.0f, bounds.height - 2.0f * borderWidth - 2.0f }, GetColor(GuiGetStyle(VALUEBOX, TEXT_COLOR_PRESSED)));
+        DrawTextEx(GuiGetFont(), state->text, textPosition, fontSize, textSpacing, baseColor);
+    }
+    else
+    {
+        DrawTextEx(GuiGetFont(), state->text, textPosition, fontSize, textSpacing, textColor);
+
+        // Caret at the end of the text, blinking
+        if (state->editing && (((int)(GetTime() * 2.0)) % 2 == 0))
+            DrawRectangle((int)(textPosition.x + textSize.x + 1), (int)textPosition.y, 2, (int)fontSize,
+                GetColor(GuiGetStyle(VALUEBOX, BORDER_COLOR_PRESSED)));
+    }
+
+    if ((label != NULL) && (label[0] != '\0'))
+    {
+        Vector2 labelSize = MeasureTextEx(GuiGetFont(), label, fontSize, textSpacing);
+        Vector2 labelPosition = {
+            bounds.x - (float)GuiGetStyle(VALUEBOX, TEXT_PADDING) - labelSize.x,
+            bounds.y + bounds.height / 2 - fontSize / 2
+        };
+        DrawTextEx(GuiGetFont(), label, labelPosition, fontSize, textSpacing, GetColor(GuiGetStyle(LABEL, TEXT_COLOR_NORMAL + style * 3)));
+    }
+
+    return result;
+}
+
 void GuiScrubberSettings(ScrubberSettings* settings, CharacterData* characterData, int screenWidth, int screenHeight)
 {
     if (characterData->count == 0) return;
@@ -731,15 +865,17 @@ void GuiScrubberSettings(ScrubberSettings* settings, CharacterData* characterDat
     bool hasFrames = (activeFrameCount > 0);
     if (hasFrames)
     {
-        if (GuiValueBox((Rectangle){ screenWidth / 2 - 540, screenHeight - 80, 50, 20 }, "Min   ", &settings->frameMinSelect, 0, activeFrameLimit, settings->frameMinEdit))
+        static GuiValueBoxSelectState minBoxState = { 0 };
+        static GuiValueBoxSelectState maxBoxState = { 0 };
+        if (GuiValueBoxSelect((Rectangle){ screenWidth / 2 - 540, screenHeight - 80, 50, 20 }, "Min   ", &settings->frameMinSelect, 0, activeFrameLimit, &minBoxState))
         {
-            settings->frameMinEdit = !settings->frameMinEdit;
-            if (!settings->frameMinEdit) { settings->frameMin = settings->frameMinSelect; ScrubberSettingsClamp(settings, characterData); }
+            settings->frameMin = settings->frameMinSelect;
+            ScrubberSettingsClamp(settings, characterData);
         }
-        if (GuiValueBox((Rectangle){ screenWidth / 2 + 470, screenHeight - 80, 50, 20 }, "Max   ", &settings->frameMaxSelect, 0, activeFrameLimit, settings->frameMaxEdit))
+        if (GuiValueBoxSelect((Rectangle){ screenWidth / 2 + 470, screenHeight - 80, 50, 20 }, "Max   ", &settings->frameMaxSelect, 0, activeFrameLimit, &maxBoxState))
         {
-            settings->frameMaxEdit = !settings->frameMaxEdit;
-            if (!settings->frameMaxEdit) { settings->frameMax = settings->frameMaxSelect; ScrubberSettingsClamp(settings, characterData); }
+            settings->frameMax = settings->frameMaxSelect;
+            ScrubberSettingsClamp(settings, characterData);
         }
         GuiLabel((Rectangle){ screenWidth / 2 + 530, screenHeight - 80, 100, 20 }, TextFormat("of %i", activeFrameLimit));
     }

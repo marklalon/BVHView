@@ -29,8 +29,6 @@ void ScrubberSettingsInit(ScrubberSettings* settings, int argc, char** argv)
     settings->frameMax = 0;
     settings->frameMinSelect = 0;
     settings->frameMaxSelect = 0;
-    settings->frameMinEdit = false;
-    settings->frameMaxEdit = false;
     settings->timeMin = 0.0f;
     settings->timeMax = 0.0f;
 }
