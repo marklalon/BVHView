@@ -698,22 +698,34 @@ static bool GLBDataLoadSource(GLBData* data, const char* filename)
     for (int boneIdx = 0; boneIdx < boneCount; boneIdx++)
     {
         data->sourceRestPose[boneIdx] = (Transform){ { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f, 1.0f }, { 1.0f, 1.0f, 1.0f } };
-        data->sourceRootPose[boneIdx] = (Transform){ { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f, 1.0f }, { 1.0f, 1.0f, 1.0f } };
         if (data->sourceSkin != NULL && boneIdx < (int)data->sourceSkin->joints_count)
-        {
-            const cgltf_node* node = data->sourceSkin->joints[boneIdx];
-            data->sourceRestPose[boneIdx] = GLBNodeLocalTransform(node);
-            if (data->model.skeleton.bones[boneIdx].parent == -1 && node != NULL && node->parent != NULL)
-            {
-                cgltf_float worldMatrix[16] = { 0 };
-                cgltf_node_transform_world(node->parent, worldMatrix);
-                MatrixDecompose(GLBMatrixFromCgltf(worldMatrix), &data->sourceRootPose[boneIdx].translation, &data->sourceRootPose[boneIdx].rotation, &data->sourceRootPose[boneIdx].scale);
-                data->sourceRootPose[boneIdx].rotation = QuaternionNormalize(data->sourceRootPose[boneIdx].rotation);
-            }
-        }
+            data->sourceRestPose[boneIdx] = GLBNodeLocalTransform(data->sourceSkin->joints[boneIdx]);
     }
+    GLBDataResetSourceRootPose(data);
 
     return true;
+}
+
+void GLBDataResetSourceRootPose(GLBData* data)
+{
+    // Root bones' non-joint parents (e.g. a Biped "Bip001" COM node) may be animated,
+    // and animation sampling overwrites sourceRootPose with that frame's value. Restore
+    // the static (node TRS) world transform so rest pose / other clips don't inherit it.
+    if (data->sourceRootPose == NULL) return;
+    int boneCount = data->model.skeleton.boneCount;
+    for (int boneIdx = 0; boneIdx < boneCount; boneIdx++)
+    {
+        data->sourceRootPose[boneIdx] = (Transform){ { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f, 1.0f }, { 1.0f, 1.0f, 1.0f } };
+        if (data->sourceSkin == NULL || boneIdx >= (int)data->sourceSkin->joints_count) continue;
+        const cgltf_node* node = data->sourceSkin->joints[boneIdx];
+        if (data->model.skeleton.bones[boneIdx].parent == -1 && node != NULL && node->parent != NULL)
+        {
+            cgltf_float worldMatrix[16] = { 0 };
+            cgltf_node_transform_world(node->parent, worldMatrix);
+            MatrixDecompose(GLBMatrixFromCgltf(worldMatrix), &data->sourceRootPose[boneIdx].translation, &data->sourceRootPose[boneIdx].rotation, &data->sourceRootPose[boneIdx].scale);
+            data->sourceRootPose[boneIdx].rotation = QuaternionNormalize(data->sourceRootPose[boneIdx].rotation);
+        }
+    }
 }
 
 static bool GLBAnimationInputWasScanned(const cgltf_animation* anim, cgltf_size channelIndex,

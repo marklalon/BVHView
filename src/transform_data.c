@@ -226,8 +226,10 @@ static bool TransformDataSampleRestPoseGLBExact(TransformData* data, GLBData* gl
 {
     if (glb->sourceRestPose == NULL || glb->sourceGlobalPose == NULL || glb->sourceLocalPose == NULL || glb->topoOrder == NULL) return false;
     int boneCount = glb->model.skeleton.boneCount;
+    if (glb->sourceRootPose == NULL) return false;
     for (int boneIdx = 0; boneIdx < boneCount; boneIdx++)
         glb->sourceLocalPose[boneIdx] = glb->sourceRestPose[boneIdx];
+    GLBDataResetSourceRootPose(glb);
     TransformDataComputeGLBSourceFK(glb, boneCount);
     GLBDataUpdateModelPose(glb, glb->sourceGlobalPose);
     TransformDataGlobalPoseToLocal(data, boneCount, glb->topoOrder, glb->sourceGlobalPose, scale);
@@ -262,6 +264,7 @@ static bool TransformDataSampleFrameGLBExact(TransformData* data, GLBData* glb, 
     int boneCount = glb->model.skeleton.boneCount;
     for (int boneIdx = 0; boneIdx < boneCount; boneIdx++)
         glb->sourceLocalPose[boneIdx] = glb->sourceRestPose[boneIdx];
+    GLBDataResetSourceRootPose(glb);
     for (cgltf_size channelIdx = 0; channelIdx < anim->channels_count; channelIdx++)
     {
         cgltf_animation_channel* channel = &anim->channels[channelIdx];

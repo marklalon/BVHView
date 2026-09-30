@@ -67,6 +67,7 @@ float GLBDataGetSourceDuration(const GLBData* data, int animIdx);
 bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSize);
 Matrix GLBDataGetModelTransform(const GLBData* glb, float scale, bool inplace);
 void GLBDataUpdateModelPose(GLBData* glb, const Transform* globalPose);
+void GLBDataResetSourceRootPose(GLBData* data);
 
 // Topological ordering
 void ComputeTopoOrder(int boneCount, BoneInfo* bones, int* topoOrder, int* invTopoOrder);
