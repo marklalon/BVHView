@@ -387,7 +387,7 @@ static float GLBMatrixMaxAbsDiff(Matrix a, Matrix b)
     return maxDiff;
 }
 
-static void GLBMeshUndoWorldTransform(Mesh* mesh, Matrix inverseWorldMatrix, Matrix inverseWorldNormalMatrix)
+static void GLBMeshApplyTransform(Mesh* mesh, Matrix transformMatrix, Matrix normalMatrix)
 {
     if (mesh->vertices != NULL)
     {
@@ -395,7 +395,7 @@ static void GLBMeshUndoWorldTransform(Mesh* mesh, Matrix inverseWorldMatrix, Mat
         {
             int base = vertexIndex * 3;
             Vector3 vertex = { mesh->vertices[base + 0], mesh->vertices[base + 1], mesh->vertices[base + 2] };
-            vertex = Vector3Transform(vertex, inverseWorldMatrix);
+            vertex = Vector3Transform(vertex, transformMatrix);
             mesh->vertices[base + 0] = vertex.x;
             mesh->vertices[base + 1] = vertex.y;
             mesh->vertices[base + 2] = vertex.z;
@@ -409,7 +409,7 @@ static void GLBMeshUndoWorldTransform(Mesh* mesh, Matrix inverseWorldMatrix, Mat
         {
             int base = normalIndex * 3;
             Vector3 normal = { mesh->normals[base + 0], mesh->normals[base + 1], mesh->normals[base + 2] };
-            normal = Vector3Normalize(Vector3Transform(normal, inverseWorldNormalMatrix));
+            normal = Vector3Normalize(Vector3Transform(normal, normalMatrix));
             mesh->normals[base + 0] = normal.x;
             mesh->normals[base + 1] = normal.y;
             mesh->normals[base + 2] = normal.z;
@@ -423,7 +423,7 @@ static void GLBMeshUndoWorldTransform(Mesh* mesh, Matrix inverseWorldMatrix, Mat
         {
             int base = tangentIndex * 4;
             Vector3 tangent = { mesh->tangents[base + 0], mesh->tangents[base + 1], mesh->tangents[base + 2] };
-            tangent = Vector3Normalize(Vector3Transform(tangent, inverseWorldMatrix));
+            tangent = Vector3Normalize(Vector3Transform(tangent, transformMatrix));
             mesh->tangents[base + 0] = tangent.x;
             mesh->tangents[base + 1] = tangent.y;
             mesh->tangents[base + 2] = tangent.z;
@@ -435,6 +435,46 @@ static void GLBMeshUndoWorldTransform(Mesh* mesh, Matrix inverseWorldMatrix, Mat
         memcpy(mesh->animVertices, mesh->vertices, mesh->vertexCount * 3 * sizeof(float));
     if (mesh->animNormals != NULL && mesh->normals != NULL)
         memcpy(mesh->animNormals, mesh->normals, mesh->vertexCount * 3 * sizeof(float));
+}
+
+// glTF skins a vertex as jointWorld * inverseBindMatrix * vertex, but raylib
+// uses each joint's node world transform as its bind pose. The two only agree
+// when nothing above the skeleton carries a transform; a scene root that scales
+// or rotates the whole model (e.g. Sketchfab's unit/up-axis conversion node)
+// would otherwise leave the unbaked skinned mesh at a different scale than the
+// skeleton. Use inverse(IBM) as the bind pose, as the spec defines.
+static void GLBDataLoadInverseBindPose(GLBData* data)
+{
+    const cgltf_skin* skin = data->sourceSkin;
+    int boneCount = data->model.skeleton.boneCount;
+    if (skin == NULL || skin->inverse_bind_matrices == NULL || data->model.skeleton.bindPose == NULL) return;
+    if ((int)skin->joints_count != boneCount || skin->inverse_bind_matrices->count < skin->joints_count) return;
+
+    Transform* bindPose = (Transform*)malloc((size_t)boneCount * sizeof(Transform));
+    if (bindPose == NULL) return;
+    for (int boneIndex = 0; boneIndex < boneCount; boneIndex++)
+    {
+        cgltf_float inverseBind[16] = { 0 };
+        if (!cgltf_accessor_read_float(skin->inverse_bind_matrices, (cgltf_size)boneIndex, inverseBind, 16))
+        {
+            free(bindPose);
+            return;
+        }
+        Matrix bindMatrix = MatrixInvert(GLBMatrixFromCgltf(inverseBind));
+        Transform* transform = &bindPose[boneIndex];
+        MatrixDecompose(bindMatrix, &transform->translation, &transform->rotation, &transform->scale);
+        transform->rotation = QuaternionNormalize(transform->rotation);
+        // Bind poses are stored as TRS; keep raylib's bind pose if an IBM has shear or mirroring.
+        float tolerance = 1e-3f * fmaxf(1.0f, GLBMatrixMaxAbsDiff(bindMatrix, (Matrix){ 0 }));
+        if (GLBMatrixMaxAbsDiff(GLBTransformToMatrix(*transform), bindMatrix) > tolerance)
+        {
+            printf("WARN: GLB inverse bind matrix %d is not a TRS transform; using joint world bind pose\n", boneIndex);
+            free(bindPose);
+            return;
+        }
+    }
+    memcpy(data->model.skeleton.bindPose, bindPose, (size_t)boneCount * sizeof(Transform));
+    free(bindPose);
 }
 
 static void GLBDataUndoSkinnedMeshNodeTransforms(GLBData* data)
@@ -459,7 +499,7 @@ static void GLBDataUndoSkinnedMeshNodeTransforms(GLBData* data)
             if (meshIndex >= data->model.meshCount) return;
             if (shouldUndoTransform)
             {
-                GLBMeshUndoWorldTransform(&data->model.meshes[meshIndex], inverseWorldMatrix, inverseWorldNormalMatrix);
+                GLBMeshApplyTransform(&data->model.meshes[meshIndex], inverseWorldMatrix, inverseWorldNormalMatrix);
                 correctedMeshCount++;
             }
             meshIndex++;
@@ -559,6 +599,14 @@ static bool GLBDataBindRigidAttachments(GLBData* data)
                 mesh->boneWeights[vertexIndex * 4] = 1.0f;
             }
             mesh->boneCount = data->model.skeleton.boneCount;
+            // raylib baked the vertices with the joint's node world transform; move them
+            // into that joint's bind space in case the bind pose came from its IBM instead.
+            cgltf_float jointWorldTransform[16] = { 0 };
+            cgltf_node_transform_world(data->sourceSkin->joints[jointIndex], jointWorldTransform);
+            Matrix rebindMatrix = MatrixMultiply(MatrixInvert(GLBMatrixFromCgltf(jointWorldTransform)),
+                GLBTransformToMatrix(data->model.skeleton.bindPose[jointIndex]));
+            if (GLBMatrixMaxAbsDiff(rebindMatrix, MatrixIdentity()) > 1e-5f)
+                GLBMeshApplyTransform(mesh, rebindMatrix, MatrixTranspose(MatrixInvert(rebindMatrix)));
             attachmentCount++;
         }
     }
@@ -1019,6 +1067,7 @@ bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSi
         }
     }
 
+    GLBDataLoadInverseBindPose(data);
     if (!GLBDataBindRigidAttachments(data))
     {
         GLBDataFree(data);
