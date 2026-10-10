@@ -187,6 +187,7 @@ void GLBDataInit(GLBData* data)
     data->sourceLocalPose = NULL;
     data->sourceGlobalPose = NULL;
     data->sourceRootPose = NULL;
+    data->inverseBindMatrices = NULL;
     data->topoOrder = NULL;
     data->invTopoOrder = NULL;
     data->materialInfo = NULL;
@@ -244,6 +245,7 @@ void GLBDataFree(GLBData* data)
     free(data->sourceLocalPose);
     free(data->sourceGlobalPose);
     free(data->sourceRootPose);
+    free(data->inverseBindMatrices);
     if (data->sourceData != NULL) cgltf_free(data->sourceData);
     free(data->topoOrder);
     free(data->invTopoOrder);
@@ -261,6 +263,7 @@ void GLBDataFree(GLBData* data)
     data->sourceLocalPose = NULL;
     data->sourceGlobalPose = NULL;
     data->sourceRootPose = NULL;
+    data->inverseBindMatrices = NULL;
     data->topoOrder = NULL;
     data->invTopoOrder = NULL;
     data->materialInfo = NULL;
@@ -362,14 +365,13 @@ static void GLBDataUpdateModelAnimationVertexBuffers(Model model)
 
 void GLBDataUpdateModelPose(GLBData* glb, const Transform* globalPose)
 {
-    if (glb->model.currentPose == NULL || glb->model.boneMatrices == NULL || glb->model.skeleton.bindPose == NULL) return;
+    if (glb->model.currentPose == NULL || glb->model.boneMatrices == NULL || glb->inverseBindMatrices == NULL) return;
     int boneCount = glb->model.skeleton.boneCount;
     for (int boneIndex = 0; boneIndex < boneCount; boneIndex++)
     {
         glb->model.currentPose[boneIndex] = globalPose[boneIndex];
-        Matrix bindPoseMatrix = GLBTransformToMatrix(glb->model.skeleton.bindPose[boneIndex]);
         Matrix currentPoseMatrix = GLBTransformToMatrix(glb->model.currentPose[boneIndex]);
-        glb->model.boneMatrices[boneIndex] = MatrixMultiply(MatrixInvert(bindPoseMatrix), currentPoseMatrix);
+        glb->model.boneMatrices[boneIndex] = MatrixMultiply(glb->inverseBindMatrices[boneIndex], currentPoseMatrix);
     }
     GLBDataUpdateModelAnimationVertexBuffers(glb->model);
 }
@@ -439,42 +441,40 @@ static void GLBMeshApplyTransform(Mesh* mesh, Matrix transformMatrix, Matrix nor
 
 // glTF skins a vertex as jointWorld * inverseBindMatrix * vertex, but raylib
 // uses each joint's node world transform as its bind pose. The two only agree
-// when nothing above the skeleton carries a transform; a scene root that scales
-// or rotates the whole model (e.g. Sketchfab's unit/up-axis conversion node)
-// would otherwise leave the unbaked skinned mesh at a different scale than the
-// skeleton. Use inverse(IBM) as the bind pose, as the spec defines.
-static void GLBDataLoadInverseBindPose(GLBData* data)
+// when nothing above the skeleton carries a transform and the nodes rest in the
+// bind pose; a scene root that scales or rotates the whole model (e.g.
+// Sketchfab's unit/up-axis conversion node) or a non-uniformly scaled mesh node
+// folded into the IBMs would otherwise leave the unbaked skinned mesh out of
+// place. Skin with the IBMs as matrices: they may contain shear, which a TRS
+// bind pose cannot represent.
+static bool GLBDataLoadInverseBindMatrices(GLBData* data)
 {
-    const cgltf_skin* skin = data->sourceSkin;
     int boneCount = data->model.skeleton.boneCount;
-    if (skin == NULL || skin->inverse_bind_matrices == NULL || data->model.skeleton.bindPose == NULL) return;
-    if ((int)skin->joints_count != boneCount || skin->inverse_bind_matrices->count < skin->joints_count) return;
+    if (boneCount <= 0 || data->model.skeleton.bindPose == NULL) return true;
+    data->inverseBindMatrices = (Matrix*)malloc((size_t)boneCount * sizeof(Matrix));
+    if (data->inverseBindMatrices == NULL) return false;
+    for (int boneIndex = 0; boneIndex < boneCount; boneIndex++)
+        data->inverseBindMatrices[boneIndex] = MatrixInvert(GLBTransformToMatrix(data->model.skeleton.bindPose[boneIndex]));
 
-    Transform* bindPose = (Transform*)malloc((size_t)boneCount * sizeof(Transform));
-    if (bindPose == NULL) return;
+    const cgltf_skin* skin = data->sourceSkin;
+    if (skin == NULL || skin->inverse_bind_matrices == NULL) return true;
+    if ((int)skin->joints_count != boneCount || skin->inverse_bind_matrices->count < skin->joints_count) return true;
+    Matrix* inverseBindMatrices = (Matrix*)malloc((size_t)boneCount * sizeof(Matrix));
+    if (inverseBindMatrices == NULL) return false;
     for (int boneIndex = 0; boneIndex < boneCount; boneIndex++)
     {
         cgltf_float inverseBind[16] = { 0 };
         if (!cgltf_accessor_read_float(skin->inverse_bind_matrices, (cgltf_size)boneIndex, inverseBind, 16))
         {
-            free(bindPose);
-            return;
+            printf("WARN: Failed to read GLB inverse bind matrix %d; using joint world bind pose\n", boneIndex);
+            free(inverseBindMatrices);
+            return true;
         }
-        Matrix bindMatrix = MatrixInvert(GLBMatrixFromCgltf(inverseBind));
-        Transform* transform = &bindPose[boneIndex];
-        MatrixDecompose(bindMatrix, &transform->translation, &transform->rotation, &transform->scale);
-        transform->rotation = QuaternionNormalize(transform->rotation);
-        // Bind poses are stored as TRS; keep raylib's bind pose if an IBM has shear or mirroring.
-        float tolerance = 1e-3f * fmaxf(1.0f, GLBMatrixMaxAbsDiff(bindMatrix, (Matrix){ 0 }));
-        if (GLBMatrixMaxAbsDiff(GLBTransformToMatrix(*transform), bindMatrix) > tolerance)
-        {
-            printf("WARN: GLB inverse bind matrix %d is not a TRS transform; using joint world bind pose\n", boneIndex);
-            free(bindPose);
-            return;
-        }
+        inverseBindMatrices[boneIndex] = GLBMatrixFromCgltf(inverseBind);
     }
-    memcpy(data->model.skeleton.bindPose, bindPose, (size_t)boneCount * sizeof(Transform));
-    free(bindPose);
+    free(data->inverseBindMatrices);
+    data->inverseBindMatrices = inverseBindMatrices;
+    return true;
 }
 
 static void GLBDataUndoSkinnedMeshNodeTransforms(GLBData* data)
@@ -538,7 +538,7 @@ static int GLBFindNearestAncestorJointIndex(const cgltf_skin* skin, const cgltf_
 // meshes on joint nodes and meshes below intermediate attachment nodes.
 static bool GLBDataBindRigidAttachments(GLBData* data)
 {
-    if (data->sourceData == NULL || data->sourceSkin == NULL || data->model.meshes == NULL) return true;
+    if (data->sourceData == NULL || data->sourceSkin == NULL || data->model.meshes == NULL || data->inverseBindMatrices == NULL) return true;
 
     int meshIndex = 0;
     int attachmentCount = 0;
@@ -604,7 +604,7 @@ static bool GLBDataBindRigidAttachments(GLBData* data)
             cgltf_float jointWorldTransform[16] = { 0 };
             cgltf_node_transform_world(data->sourceSkin->joints[jointIndex], jointWorldTransform);
             Matrix rebindMatrix = MatrixMultiply(MatrixInvert(GLBMatrixFromCgltf(jointWorldTransform)),
-                GLBTransformToMatrix(data->model.skeleton.bindPose[jointIndex]));
+                MatrixInvert(data->inverseBindMatrices[jointIndex]));
             if (GLBMatrixMaxAbsDiff(rebindMatrix, MatrixIdentity()) > 1e-5f)
                 GLBMeshApplyTransform(mesh, rebindMatrix, MatrixTranspose(MatrixInvert(rebindMatrix)));
             attachmentCount++;
@@ -1067,7 +1067,13 @@ bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSi
         }
     }
 
-    GLBDataLoadInverseBindPose(data);
+    if (!GLBDataLoadInverseBindMatrices(data))
+    {
+        GLBDataFree(data);
+        snprintf(errMsg, errMsgSize, "Error: Out of memory while loading inverse bind matrices for '%s'", filename);
+        printf("ERROR: %s\n", errMsg);
+        return false;
+    }
     if (!GLBDataBindRigidAttachments(data))
     {
         GLBDataFree(data);

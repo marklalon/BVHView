@@ -52,6 +52,7 @@ typedef struct GLBData
     Transform* sourceLocalPose;
     Transform* sourceGlobalPose;
     Transform* sourceRootPose;
+    Matrix* inverseBindMatrices;    // per-bone skinning inverse bind matrices (glTF IBMs)
     int* topoOrder;
     int* invTopoOrder;
     GLBMaterialInfo* materialInfo;
