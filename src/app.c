@@ -815,8 +815,15 @@ void ApplicationUpdate(void* voidApplicationState)
     else if (bindPoseJustDisabled && !app->scrubberSettings.userPaused && ScrubberHasValidAnimation(&app->characterData, app->characterData.active))
         app->scrubberSettings.playing = true;
 
+    // Resume when switching from a static/no-animation preview back to an animation.
+    bool hasValidAnimation = ScrubberHasValidAnimation(&app->characterData, app->characterData.active);
+    if (hasValidAnimation && !app->previousHasValidAnimation &&
+        !app->scrubberSettings.userPaused && !app->renderSettings.drawBindPose)
+        app->scrubberSettings.playing = true;
+    app->previousHasValidAnimation = hasValidAnimation;
+
     // No skeleton or animation too short → stop playback
-    if (!ScrubberHasValidAnimation(&app->characterData, app->characterData.active))
+    if (!hasValidAnimation)
         app->scrubberSettings.playing = false;
 
     // Tick time forward

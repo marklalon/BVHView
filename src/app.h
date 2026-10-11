@@ -80,6 +80,8 @@ typedef struct ApplicationState {
 
     // Track whether the first file has been loaded (for auto-enabling mesh drawing)
     bool firstFileLoaded;
+    // Track animation availability so switching back from a static action resumes playback.
+    bool previousHasValidAnimation;
 
 #if defined(_WIN32) && !defined(PLATFORM_WEB)
     HANDLE reuseMailslot;
