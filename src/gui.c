@@ -233,7 +233,7 @@ void GuiCustomGroupBox(Rectangle bounds, const char* text)
 
 void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterData, RenderSettings* settings, CapsuleData* capsuleData, int argc, char** argv)
 {
-    GuiCustomGroupBox((Rectangle){ 20, 10, 190, 260 }, "Info");
+    GuiCustomGroupBox((Rectangle){ 20, 10, 190, 290 }, "Info");
 
     int ci = characterData->active;
     bool hasCharacter = characterData->count > 0 && ci >= 0 && ci < characterData->count;
@@ -388,25 +388,30 @@ void GuiOrbitCamera(OrbitCamera* camera, CharacterData* characterData, RenderSet
         settings->lightAltitude = ArgFloat(argc, argv, "lightAltitude", 0.8f);
     }
 
+    if (!hasCharacter) GuiDisable();
+    if (GuiButton((Rectangle){ 30, 170, 100, 20 }, "Copy Path") && hasCharacter)
+        SetClipboardText(characterData->filePaths[ci]);
+    if (!hasCharacter) GuiEnable();
+
     // Skeleton/animation controls are meaningless for mesh-only GLBs (no joints),
     // so only show the track/skeleton UI when the active character has a skeleton.
     if (hasCharacter && jointCount > 0)
     {
-        GuiToggle((Rectangle){ 30, 170, 100, 20 }, "Track", &camera->track);
+        GuiToggle((Rectangle){ 30, 200, 100, 20 }, "Track", &camera->track);
         bool skeletonToggle = camera->showSkeletonPanel;
-        GuiToggle((Rectangle){ 30, 200, 100, 20 }, "Skeleton", &skeletonToggle);
+        GuiToggle((Rectangle){ 30, 230, 100, 20 }, "Skeleton", &skeletonToggle);
         int bsel = camera->selectedBone;
         if (bsel < 0) bsel = 0;
         if (bsel >= jointCount) bsel = jointCount - 1;
         char jointText[32];
         snprintf(jointText, sizeof(jointText), "%d/%d", bsel + 1, jointCount);
-        DrawText(jointText, 135, 205, 10, (Color){ 153, 153, 153, 255 });
+        DrawText(jointText, 135, 235, 10, (Color){ 153, 153, 153, 255 });
         if (camera->selectedBone >= 0 && camera->selectedBone < jointCount)
         {
             const char* boneName = characterData->isGLB[ci]
                 ? characterData->glbData[ci].model.skeleton.bones[characterData->glbData[ci].topoOrder[camera->selectedBone]].name
                 : characterData->bvhData[ci].joints[camera->selectedBone].name;
-            DrawText(boneName, 50, 230, 10, GOLD);
+            DrawText(boneName, 50, 260, 10, GOLD);
         }
         if (skeletonToggle != camera->showSkeletonPanel)
         {
@@ -588,7 +593,7 @@ void GuiRenderSettings(RenderSettings* settings, CapsuleData* capsuleData, bool 
 
 void GuiCharacterData(CharacterData* characterData, GuiWindowFileDialogState* fileDialogState, ScrubberSettings* scrubberSettings, char* errMsg, int argc, char** argv)
 {
-    int offsetHeight = 280;
+    int offsetHeight = 310;
     GuiCustomGroupBox((Rectangle){ 20, offsetHeight, 190, (CHARACTERS_MAX - 1) * 30 + 190 }, "Characters");
 #if !defined(PLATFORM_WEB)
     if (GuiButton((Rectangle){ 30, offsetHeight + 20, 110, 20 }, "Open"))
