@@ -181,6 +181,7 @@ void GLBDataInit(GLBData* data)
     data->sourceFrameCounts = NULL;
     data->sourceFrameTimes = NULL;
     data->sourceDurations = NULL;
+    data->sourceStartTimes = NULL;
     data->sourceData = NULL;
     data->sourceSkin = NULL;
     data->sourceRestPose = NULL;
@@ -241,6 +242,7 @@ void GLBDataFree(GLBData* data)
     free(data->sourceFrameCounts);
     free(data->sourceFrameTimes);
     free(data->sourceDurations);
+    free(data->sourceStartTimes);
     free(data->sourceRestPose);
     free(data->sourceLocalPose);
     free(data->sourceGlobalPose);
@@ -257,6 +259,7 @@ void GLBDataFree(GLBData* data)
     data->sourceFrameCounts = NULL;
     data->sourceFrameTimes = NULL;
     data->sourceDurations = NULL;
+    data->sourceStartTimes = NULL;
     data->sourceData = NULL;
     data->sourceSkin = NULL;
     data->sourceRestPose = NULL;
@@ -295,6 +298,13 @@ float GLBDataGetSourceDuration(const GLBData* data, int animIdx)
     if (data->sourceDurations != NULL && data->sourceDurations[animIdx] > 0.0f)
         return data->sourceDurations[animIdx];
     return (GLBDataGetSourceFrameCount(data, animIdx) - 1) * GLBDataGetSourceFrameTime(data, animIdx);
+}
+
+float GLBDataGetSourceStartTime(const GLBData* data, int animIdx)
+{
+    if (data->animCount <= 0 || data->sourceStartTimes == NULL) return 0.0f;
+    animIdx = ClampInt(animIdx, 0, data->animCount - 1);
+    return data->sourceStartTimes[animIdx];
 }
 
 Matrix GLBMatrixFromCgltf(const cgltf_float* m)
@@ -682,6 +692,14 @@ bool GLBGetPoseAtTime(cgltf_interpolation_type interpolationType, cgltf_accessor
     }
     else
     {
+        float tfirst = 0.0f;
+        float tlast = 0.0f;
+        if (!cgltf_accessor_read_float(input, 0, &tfirst, 1)) return false;
+        if (!cgltf_accessor_read_float(input, input->count - 1, &tlast, 1)) return false;
+        // Hold the boundary key outside the sampled range; otherwise the search
+        // below falls through to the last segment for times before the first key.
+        if (time <= tfirst) time = tfirst;
+        else if (time >= tlast) time = tlast;
         for (int i = 0; i < (int)input->count - 1; i++)
         {
             if (!cgltf_accessor_read_float(input, i, &tstart, 1)) return false;
@@ -803,8 +821,10 @@ static bool GLBDataInitSourceAnimations(GLBData* data)
     data->sourceFrameCounts = (int*)calloc((size_t)data->animCount, sizeof(int));
     data->sourceFrameTimes = (float*)calloc((size_t)data->animCount, sizeof(float));
     data->sourceDurations = (float*)calloc((size_t)data->animCount, sizeof(float));
+    data->sourceStartTimes = (float*)calloc((size_t)data->animCount, sizeof(float));
     if (data->animations == NULL || data->sourceFrameCounts == NULL ||
-        data->sourceFrameTimes == NULL || data->sourceDurations == NULL) return false;
+        data->sourceFrameTimes == NULL || data->sourceDurations == NULL ||
+        data->sourceStartTimes == NULL) return false;
 
     const cgltf_skin* skin = data->sourceSkin;
     for (int a = 0; a < data->animCount; a++)
@@ -816,7 +836,8 @@ static bool GLBDataInitSourceAnimations(GLBData* data)
         if (anim->name != NULL)
             strncpy(data->animations[a].name, anim->name, sizeof(data->animations[a].name) - 1);
 
-        float duration = 0.0f;
+        float startTime = FLT_MAX;
+        float endTime = -FLT_MAX;
         float minDelta = FLT_MAX;
         int maxInputCount = 0;
         bool hasTimeSamples = false;
@@ -838,7 +859,8 @@ static bool GLBDataInitSourceAnimations(GLBData* data)
                 float time = 0.0f;
                 if (!cgltf_accessor_read_float(sampler->input, sampleIdx, &time, 1)) break;
                 hasTimeSamples = true;
-                if (time > duration) duration = time;
+                if (time < startTime) startTime = time;
+                if (time > endTime) endTime = time;
                 if (hasPrevTime)
                 {
                     float delta = time - prevTime;
@@ -849,6 +871,10 @@ static bool GLBDataInitSourceAnimations(GLBData* data)
             }
         }
 
+        // Exporters (e.g. Mixamo via Blender) may start keys at frame 1 rather
+        // than t=0; the timeline starts at the first key so frame 0 is that key.
+        if (!hasTimeSamples) { startTime = 0.0f; endTime = 0.0f; }
+        float duration = fmaxf(endTime - startTime, 0.0f);
         int frameCount = 1;
         float frameTime = data->frameTime;
         if (hasTimeSamples)
@@ -870,6 +896,7 @@ static bool GLBDataInitSourceAnimations(GLBData* data)
         data->sourceFrameCounts[a] = frameCount;
         data->sourceFrameTimes[a] = frameTime;
         data->sourceDurations[a] = duration;
+        data->sourceStartTimes[a] = startTime;
     }
     return true;
 }

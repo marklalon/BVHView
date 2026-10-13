@@ -260,7 +260,7 @@ static bool TransformDataSampleFrameGLBExact(TransformData* data, GLBData* glb, 
     if (animIdx < 0 || animIdx >= (int)glb->sourceData->animations_count) return false;
     cgltf_animation* anim = &glb->sourceData->animations[animIdx];
     float duration = GLBDataGetSourceDuration(glb, animIdx);
-    float timeClamped = Clamp(time, 0.0f, duration > 0.0f ? duration : time);
+    float timeClamped = Clamp(time, 0.0f, duration > 0.0f ? duration : time) + GLBDataGetSourceStartTime(glb, animIdx);
     int boneCount = glb->model.skeleton.boneCount;
     for (int boneIdx = 0; boneIdx < boneCount; boneIdx++)
         glb->sourceLocalPose[boneIdx] = glb->sourceRestPose[boneIdx];

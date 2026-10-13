@@ -46,6 +46,7 @@ typedef struct GLBData
     int* sourceFrameCounts;
     float* sourceFrameTimes;
     float* sourceDurations;
+    float* sourceStartTimes;    // per-animation time of the first key; playback time 0 maps here
     cgltf_data* sourceData;
     cgltf_skin* sourceSkin;
     Transform* sourceRestPose;
@@ -65,6 +66,7 @@ void GLBDataFree(GLBData* data);
 int GLBDataGetSourceFrameCount(const GLBData* data, int animIdx);
 float GLBDataGetSourceFrameTime(const GLBData* data, int animIdx);
 float GLBDataGetSourceDuration(const GLBData* data, int animIdx);
+float GLBDataGetSourceStartTime(const GLBData* data, int animIdx);
 bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSize);
 Matrix GLBDataGetModelTransform(const GLBData* glb, float scale, bool inplace);
 void GLBDataUpdateModelPose(GLBData* glb, const Transform* globalPose);
