@@ -647,7 +647,7 @@ void GuiCharacterData(CharacterData* characterData, GuiWindowFileDialogState* fi
             ScrubberSettingsInitMaxs(scrubberSettings, characterData);
             char windowTitle[528];
             snprintf(windowTitle, sizeof(windowTitle), "%s - BVHView", characterData->filePaths[characterData->active]);
-            SetWindowTitle(windowTitle);
+            AppSetWindowTitle(windowTitle);
         }
         DrawRectangleRec((Rectangle){ 180, offsetHeight + 50 + i * 30, 20, 20 }, characterData->colors[i]);
         DrawRectangleLinesEx((Rectangle){ 180, offsetHeight + 50 + i * 30, 20, 20 }, 1, (Color){ 102, 102, 105, 255 });

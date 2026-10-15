@@ -34,6 +34,36 @@
 #include "argparse.h"
 #include "camera.h"
 
+// Keep window titles valid UTF-8 when a path arrives in the Windows ANSI code
+// page (for example, through a legacy shell launch).
+void AppSetWindowTitle(const char* title)
+{
+#if defined(_WIN32) && !defined(PLATFORM_WEB)
+    int wideLength = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, title, -1, NULL, 0);
+    if (wideLength == 0)
+    {
+        wideLength = MultiByteToWideChar(CP_ACP, 0, title, -1, NULL, 0);
+        if (wideLength > 0)
+        {
+            wchar_t wideTitle[1200];
+            char utf8Title[4800];
+            if (wideLength <= (int)(sizeof(wideTitle) / sizeof(wideTitle[0])) &&
+                MultiByteToWideChar(CP_ACP, 0, title, -1, wideTitle, wideLength) > 0)
+            {
+                int utf8Length = WideCharToMultiByte(CP_UTF8, 0, wideTitle, -1,
+                                                     utf8Title, (int)sizeof(utf8Title), NULL, NULL);
+                if (utf8Length > 0)
+                {
+                    SetWindowTitle(utf8Title);
+                    return;
+                }
+            }
+        }
+    }
+#endif
+    SetWindowTitle(title);
+}
+
 #if defined(_WIN32) && !defined(PLATFORM_WEB)
 #define MAILSLOT_NO_MESSAGE ((DWORD)-1)
 #endif
@@ -515,7 +545,7 @@ void OnFileLoaded(ApplicationState* app)
         snprintf(windowTitle, sizeof(windowTitle), "%s - BVHView",
                  app->characterData.filePaths[app->characterData.active]);
     }
-    SetWindowTitle(windowTitle);
+    AppSetWindowTitle(windowTitle);
 }
 
 #if defined(_WIN32) && !defined(PLATFORM_WEB)
@@ -623,7 +653,7 @@ void ApplicationUpdate(void* voidApplicationState)
         ScrubberSettingsInitMaxs(&app->scrubberSettings, &app->characterData);
         char windowTitle[528];
         snprintf(windowTitle, sizeof(windowTitle), "%s - BVHView", app->characterData.filePaths[app->characterData.active]);
-        SetWindowTitle(windowTitle);
+        AppSetWindowTitle(windowTitle);
     }
 
     // ArrowLeft/ArrowRight: replace the active character with the previous/next
@@ -693,7 +723,7 @@ void ApplicationUpdate(void* voidApplicationState)
                                  app->characterData.filePaths[activeSlot],
                                  app->fileListIndex + 1,
                                  app->fileListCount);
-                        SetWindowTitle(windowTitle);
+                        AppSetWindowTitle(windowTitle);
                     }
                     else
                     {

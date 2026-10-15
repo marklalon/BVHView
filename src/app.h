@@ -91,5 +91,6 @@ typedef struct ApplicationState {
 void ApplicationUpdate(void* voidApplicationState);
 void OnFileLoaded(ApplicationState* app);
 void ApplicationCleanup(ApplicationState* app);
+void AppSetWindowTitle(const char* title);
 
 #endif // APP_H
