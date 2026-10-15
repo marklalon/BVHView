@@ -18,6 +18,7 @@
 #include "argparse.h"
 #include "profile.h"
 #include "studio_light.h"
+#include "file_io.h"
 
 #if defined(PLATFORM_WEB)
 #include <emscripten/emscripten.h>
@@ -365,6 +366,7 @@ int main(int argc, char** argv)
     SetConfigFlags(FLAG_VSYNC_HINT);
     SetConfigFlags(FLAG_MSAA_4X_HINT);
     InitWindow(app.screenWidth, app.screenHeight, "BVHView");
+    SetLoadFileDataCallback(LoadFileDataUtf8);
     SetTargetFPS(0);
 
     GuiInitDarkMode();

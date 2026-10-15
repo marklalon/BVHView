@@ -29,6 +29,7 @@
 #include "raymath.h"
 #include "rlgl.h"
 #include "glb_data.h"
+#include "file_io.h"
 #include "transform_data.h"
 #include "math_utils.h"
 
@@ -37,6 +38,54 @@ static bool GLBDataIsWebP(const cgltf_image* image, const unsigned char* bytes, 
     if (image != NULL && image->mime_type != NULL && strcmp(image->mime_type, "image/webp") == 0) return true;
     if (size >= 12 && memcmp(bytes, "RIFF", 4) == 0 && memcmp(bytes + 8, "WEBP", 4) == 0) return true;
     return false;
+}
+
+static cgltf_result GLBFileReadUtf8(const cgltf_memory_options* memoryOptions,
+    const cgltf_file_options* fileOptions, const char* path, cgltf_size* size, void** data)
+{
+    (void)memoryOptions;
+    (void)fileOptions;
+    FILE* file = FileOpenUtf8(path, "rb");
+    if (file == NULL) return cgltf_result_file_not_found;
+
+    if (fseek(file, 0, SEEK_END) != 0)
+    {
+        fclose(file);
+        return cgltf_result_io_error;
+    }
+    long fileSize = ftell(file);
+    if (fileSize < 0 || fseek(file, 0, SEEK_SET) != 0)
+    {
+        fclose(file);
+        return cgltf_result_io_error;
+    }
+
+    void* contents = malloc((size_t)fileSize);
+    if (contents == NULL && fileSize > 0)
+    {
+        fclose(file);
+        return cgltf_result_out_of_memory;
+    }
+    size_t bytesRead = fread(contents, 1, (size_t)fileSize, file);
+    fclose(file);
+    if (bytesRead != (size_t)fileSize)
+    {
+        free(contents);
+        return cgltf_result_io_error;
+    }
+
+    *size = (cgltf_size)fileSize;
+    *data = contents;
+    return cgltf_result_success;
+}
+
+static void GLBFileReleaseUtf8(const cgltf_memory_options* memoryOptions,
+    const cgltf_file_options* fileOptions, void* data, cgltf_size size)
+{
+    (void)memoryOptions;
+    (void)fileOptions;
+    (void)size;
+    free(data);
 }
 
 static unsigned char* GLBDataLoadImageURI(const char* modelFilename, const char* uri, int* size)
@@ -755,6 +804,8 @@ static bool GLBDataLoadSource(GLBData* data, const char* filename)
     // Always parse the source GLTF data to obtain skeleton skin, rest pose, and
     // material information — even when there are no animations (static preview).
     cgltf_options options = { 0 };
+    options.file.read = GLBFileReadUtf8;
+    options.file.release = GLBFileReleaseUtf8;
     cgltf_result result = cgltf_parse_file(&options, filename, &data->sourceData);
     if (result != cgltf_result_success) { printf("WARN: Failed to parse GLB source data for '%s'\n", filename); return false; }
     result = cgltf_load_buffers(&options, data->sourceData, filename);
