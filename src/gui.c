@@ -428,6 +428,25 @@ int GetJointDepth(int jointIndex, const int* parents)
     return depth;
 }
 
+// Depth-first row order so each joint is listed directly under its parent's subtree
+// (joint indices are only guaranteed parent-before-child, e.g. GLB skin order).
+static int BuildJointDisplayOrder(int jointCount, const int* parents, int* order)
+{
+    static int stack[1024];
+    int count = 0;
+    int top = 0;
+    for (int r = jointCount - 1; r >= 0; r--)
+        if (parents[r] < 0 && top < 1024) stack[top++] = r;
+    while (top > 0 && count < jointCount)
+    {
+        int j = stack[--top];
+        order[count++] = j;
+        for (int c = jointCount - 1; c >= 0; c--)
+            if (parents[c] == j && top < 1024) stack[top++] = c;
+    }
+    return count;
+}
+
 void GuiSkeletonPanel(OrbitCamera* camera, CharacterData* characterData, int screenWidth, int screenHeight)
 {
     int ci = characterData->active;
@@ -475,8 +494,11 @@ void GuiSkeletonPanel(OrbitCamera* camera, CharacterData* characterData, int scr
     Vector2 mouse = GetMousePosition();
     int hoveredIndex = -1;
     Rectangle hoveredItemRec = { 0, 0, 0, 0 };
-    for (int i = visibleStart; i < jointCount && i < visibleStart + visibleCount; i++)
+    static int displayOrder[1024];
+    int rowCount = BuildJointDisplayOrder(jointCount < 1024 ? jointCount : 1024, boneParents, displayOrder);
+    for (int row = visibleStart; row < rowCount && row < visibleStart + visibleCount; row++)
     {
+        int i = displayOrder[row];
         int depth = GetJointDepth(i, boneParents);
         int indent = depth * 2;
         static char displayName[256];
@@ -489,7 +511,7 @@ void GuiSkeletonPanel(OrbitCamera* camera, CharacterData* characterData, int scr
         memcpy(displayName + pos, nm, nameLen);
         pos += nameLen;
         displayName[pos] = '\0';
-        Rectangle itemRec = { view.x, view.y + scroll.y + (float)(i * itemHeight), view.width, (float)itemHeight - 2 };
+        Rectangle itemRec = { view.x, view.y + scroll.y + (float)(row * itemHeight), view.width, (float)itemHeight - 2 };
         bool isHovered = CheckCollisionPointRec(mouse, itemRec);
         if (isHovered)
         {
