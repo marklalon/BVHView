@@ -1,0 +1,9 @@
+[submodule "build/raylib/raylib"]
+	path = build/raylib/raylib
+	url = https://github.com/marklalon/raylib.git
+[submodule "build/raylib/raygui"]
+	path = build/raylib/raygui
+	url = https://github.com/marklalon/raygui.git
+[submodule "build/libwebp"]
+	path = build/libwebp
+	url = https://github.com/webmproject/libwebp.git
