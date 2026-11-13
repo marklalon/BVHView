@@ -14,53 +14,57 @@ https://github.com/orangeduck/BVHView/assets/177299/9f976284-02c1-4a14-bca4-b8b3
 
 # Building
 
-WebP texture decoding uses [libwebp 1.6.0](https://github.com/webmproject/libwebp). On Windows, `build.bat` downloads it into `build/libwebp` automatically. When invoking `make` directly on any platform, clone that release first (or pass its location as `WEBP_DIR`):
+BVHView pulls its three dependencies in as [git submodules](https://git-scm.com/book/en/v2/Git-Tools-Submodules):
+
+* [raylib](https://github.com/marklalon/raylib) → `build/raylib/raylib`
+* [raygui](https://github.com/marklalon/raygui) → `build/raylib/raygui`
+* [libwebp 1.6.0](https://github.com/webmproject/libwebp) → `build/libwebp`
+
+The `raylib` and `raygui` submodules point at the [marklalon/raylib](https://github.com/marklalon/raylib) and [marklalon/raygui](https://github.com/marklalon/raygui) forks, which carry BVHView-specific patches — they are required to build.
+
+Clone the repo together with its submodules:
 
 ```sh
-git clone --depth 1 --branch v1.6.0 https://github.com/webmproject/libwebp.git build/libwebp
+git clone --recurse-submodules <this-repo-url>
 ```
+
+If you already have a clone without them, initialize them once:
+
+```sh
+git submodule update --init --recursive
+```
+
+`build.bat` also runs that automatically if the submodules are missing. After the submodules are in place, build raylib first, then BVHView. When invoking `make` directly, pass `RAYLIB_DIR=build/raylib` so it finds the submodule copy (its default is `C:/raylib` or `~/raylib`). `WEBP_DIR` already defaults to `build/libwebp`.
 
 ## Windows
 
 Download and install [MinGW](https://www.mingw-w64.org/) in some form. Perhaps [w64devkit](https://www.mingw-w64.org/downloads/#w64devkit) or [MSYS2](https://www.mingw-w64.org/downloads/#msys2).
 
-Download [raylib](https://github.com/raysan5/raylib) into `C:/raylib/raylib`.
+Build raylib by going to `build/raylib/raylib/src` and running `make`.
 
-Download [raygui](https://github.com/raysan5/raygui) into `C:/raylib/raygui`.
+Run `build.bat` (or `make RAYLIB_DIR=build/raylib`) in the main directory to build `bvhview.exe`.
 
-Build raylib by going to `C:/raylib/raylib/src` and running `make`.
-
-Download this repo and run `make` in the main directory to build `bvhview.exe`.
-
-To build a release version with optimizations enabled and no console window run `make BUILD_MODE=RELEASE` in the main directory instead.
+To build a release version with optimizations enabled and no console window run `make BUILD_MODE=RELEASE RAYLIB_DIR=build/raylib` in the main directory instead.
 
 ## macOS
 
 Install the Xcode command line tools (or an alternative toolchain such as Homebrew’s GCC/Clang) so `make` and `clang` are available.
 
-Download [raylib](https://github.com/raysan5/raylib) into `~/raylib/raylib`.
+Build raylib by going to `build/raylib/raylib/src` and running `make PLATFORM=PLATFORM_DESKTOP`.
 
-Download [raygui](https://github.com/raysan5/raygui) into `~/raylib/raygui`.
+Run `make PLATFORM_OS=Darwin RAYLIB_DIR=build/raylib` in the main directory to build `bvhview`.
 
-Build raylib by going to `~/raylib/raylib/src` and running `make PLATFORM=PLATFORM_DESKTOP`.
-
-Download this repo and run `make PLATFORM_OS=Darwin` in the main directory to build `bvhview`.
-
-To build a release version with optimizations enabled run `make BUILD_MODE=RELEASE PLATFORM_OS=Darwin` in the main directory instead.
+To build a release version with optimizations enabled run `make BUILD_MODE=RELEASE PLATFORM_OS=Darwin RAYLIB_DIR=build/raylib` in the main directory instead.
 
 ## Linux
 
-Download [raylib](https://github.com/raysan5/raylib) into `~/raylib/raylib`.
+Follow [this guide](https://github.com/raysan5/raylib/wiki/Working-on-GNU-Linux) to install any dependencies.
 
-Download [raygui](https://github.com/raysan5/raygui) into `~/raylib/raygui`.
+Build raylib by going to `build/raylib/raylib/src` and running `make`.
 
-Follow [this guide](https://github.com/raysan5/raylib/wiki/Working-on-GNU-Linux) to install any dependencies. 
+Run `make RAYLIB_DIR=build/raylib` in the main directory to build `bvhview`.
 
-Build raylib by going to `~/raylib/raylib/src` and running `make`.
-
-Download this repo and run `make` in the main directory to build `bvhview`.
-
-To build a release version with optimizations enabled run `make BUILD_MODE=RELEASE` in the main directory instead.
+To build a release version with optimizations enabled run `make BUILD_MODE=RELEASE RAYLIB_DIR=build/raylib` in the main directory instead.
 
 ## Other
 

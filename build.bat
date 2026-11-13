@@ -25,7 +25,7 @@ echo   clean    - Remove built executable
 goto end
 
 :release
-call :ensure_webp
+call :ensure_submodules
 if errorlevel 1 goto end
 echo Building RELEASE ...
 make BUILD_MODE=RELEASE RAYLIB_DIR="%RAYLIB_DIR%" WEBP_DIR="%WEBP_DIR%"
@@ -37,7 +37,7 @@ echo Done.
 goto end
 
 :debug
-call :ensure_webp
+call :ensure_submodules
 if errorlevel 1 goto end
 echo Building DEBUG ...
 make BUILD_MODE=DEBUG RAYLIB_DIR="%RAYLIB_DIR%" WEBP_DIR="%WEBP_DIR%"
@@ -53,22 +53,13 @@ echo Cleaning ...
 make clean
 goto end
 
-:ensure_webp
-if exist "build\libwebp\src\webp\decode.h" exit /b 0
-echo Downloading libwebp 1.6.0 ...
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ErrorActionPreference = 'Stop';" ^
-  "$build = Join-Path (Get-Location) 'build';" ^
-  "$zip = Join-Path $build 'libwebp-1.6.0.zip';" ^
-  "$source = Join-Path $build 'libwebp-1.6.0';" ^
-  "$target = Join-Path $build 'libwebp';" ^
-  "Invoke-WebRequest 'https://github.com/webmproject/libwebp/archive/refs/tags/v1.6.0.zip' -OutFile $zip;" ^
-  "Expand-Archive -LiteralPath $zip -DestinationPath $build -Force;" ^
-  "if (Test-Path $target) { Remove-Item -LiteralPath $target -Recurse -Force };" ^
-  "Move-Item -LiteralPath $source -Destination $target;" ^
-  "Remove-Item -LiteralPath $zip -Force"
+:ensure_submodules
+if exist "build\libwebp\src\webp\decode.h" if exist "build\raylib\raylib\src\raylib.h" if exist "build\raylib\raygui\src\raygui.h" exit /b 0
+echo Submodules not initialized. Running: git submodule update --init --recursive ...
+git submodule update --init --recursive
 if errorlevel 1 (
-    echo ERROR: Failed to download libwebp.
+    echo ERROR: Failed to initialize submodules.
+    echo Run manually: git submodule update --init --recursive
     exit /b 1
 )
 exit /b 0
