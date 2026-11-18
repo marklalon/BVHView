@@ -48,6 +48,10 @@ BOOL WINAPI ShowWindow(HWND hWnd, int nCmdShow);
 BOOL WINAPI SetForegroundWindow(HWND hWnd);
 BOOL WINAPI EnumWindows(BOOL (CALLBACK *lpEnumFunc)(HWND, LPARAM), LPARAM lParam);
 int WINAPI GetWindowTextA(HWND hWnd, LPSTR lpString, int nMaxCount);
+BOOL WINAPI GetWindowRect(HWND hWnd, LPRECT lpRect);
+BOOL WINAPI MoveWindow(HWND hWnd, int X, int Y, int nWidth, int nHeight, BOOL bRepaint);
+int WINAPI GetSystemMetrics(int nIndex);
+DWORD WINAPI GetWindowThreadProcessId(HWND hWnd, LPDWORD lpdwProcessId);
 
 // Data passed to EnumWindows callback to find a BVHView window
 typedef struct {
@@ -298,6 +302,58 @@ static bool DownloadProtocolArg(const char* protocolArg, char* outputPath, size_
 
     return true;
 }
+
+// GLFW's default window placement can land the window off the visible screen
+// on displays with non-standard DPI scaling (e.g. 110%), leaving it invisible.
+// The application never sets a window position, and this raylib build does not
+// expose SetWindowPosition, so reposition our own top-level window back onto
+// the visible (virtual) screen if it was created off-screen.
+static DWORD FindWindowPid;
+static BOOL CALLBACK FindOwnWindowCallback(HWND hwnd, LPARAM lParam)
+{
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == FindWindowPid)
+    {
+        *(HWND*)lParam = hwnd;
+        return FALSE; // stop enumeration
+    }
+    return TRUE; // continue enumeration
+}
+
+static void EnsureWindowOnScreen(void)
+{
+    FindWindowPid = GetCurrentProcessId();
+    HWND hwnd = NULL;
+    EnumWindows(FindOwnWindowCallback, (LPARAM)&hwnd);
+    if (!hwnd) return;
+
+    RECT rect;
+    if (!GetWindowRect(hwnd, &rect)) return;
+
+    int vx = GetSystemMetrics(76); // SM_XVIRTUALSCREEN
+    int vy = GetSystemMetrics(77); // SM_YVIRTUALSCREEN
+    int vw = GetSystemMetrics(78); // SM_CXVIRTUALSCREEN
+    int vh = GetSystemMetrics(79); // SM_CYVIRTUALSCREEN
+    if (vw == 0 || vh == 0) return;
+
+    // On-screen if any part of the window overlaps the virtual screen.
+    bool onScreen = (rect.right > vx) && (rect.left < vx + vw) &&
+                    (rect.bottom > vy) && (rect.top < vy + vh);
+    if (onScreen) return;
+
+    int w = rect.right - rect.left;
+    int h = rect.bottom - rect.top;
+    if (w <= 0) w = 1280;
+    if (h <= 0) h = 720;
+
+    // Center on the virtual screen, clamped so the top stays visible.
+    int x = vx + (vw - w) / 2;
+    int y = vy + (vh - h) / 2;
+    if (y < vy) y = vy;
+    if (x < vx) x = vx;
+    MoveWindow(hwnd, x, y, w, h, TRUE);
+}
 #endif
 
 int main(int argc, char** argv)
@@ -357,6 +413,27 @@ int main(int argc, char** argv)
     app.argv = argv;
     app.screenWidth = ArgInt(argc, argv, "screenWidth", 1920);
     app.screenHeight = ArgInt(argc, argv, "screenHeight", 1080);
+#if defined(_WIN32) && !defined(PLATFORM_WEB)
+    // Unless the user explicitly requested a size on the command line, cap the
+    // window at 80% of the screen (absolute cap 1920x1080) so it is never larger
+    // than the display.
+    bool explicitSize = (ArgFind(argc, argv, "screenWidth") != NULL) &&
+                        (ArgFind(argc, argv, "screenHeight") != NULL);
+    if (!explicitSize)
+    {
+        int sw = GetSystemMetrics(78); // SM_CXVIRTUALSCREEN
+        int sh = GetSystemMetrics(79); // SM_CYVIRTUALSCREEN
+        if (sw > 0 && sh > 0)
+        {
+            int maxW = (int)(sw * 0.8f);
+            int maxH = (int)(sh * 0.8f);
+            if (maxW > 1920) maxW = 1920;
+            if (maxH > 1080) maxH = 1080;
+            if (app.screenWidth > maxW) app.screenWidth = maxW;
+            if (app.screenHeight > maxH) app.screenHeight = maxH;
+        }
+    }
+#endif
     app.firstFileLoaded = false;
     app.previousHasValidAnimation = false;
 #if defined(_WIN32) && !defined(PLATFORM_WEB)
@@ -366,6 +443,9 @@ int main(int argc, char** argv)
     SetConfigFlags(FLAG_VSYNC_HINT);
     SetConfigFlags(FLAG_MSAA_4X_HINT);
     InitWindow(app.screenWidth, app.screenHeight, "BVHView");
+#if defined(_WIN32) && !defined(PLATFORM_WEB)
+    EnsureWindowOnScreen();
+#endif
     SetLoadFileDataCallback(LoadFileDataUtf8);
     SetTargetFPS(0);
 
