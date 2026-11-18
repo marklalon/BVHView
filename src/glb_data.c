@@ -799,17 +799,87 @@ static bool GLBAnimationTargetsSkinJoint(const cgltf_skin* skin, const cgltf_nod
     return false;
 }
 
-static bool GLBDataLoadSource(GLBData* data, const char* filename)
+static bool GLBDataParseSource(GLBData* data, const char* filename)
 {
-    // Always parse the source GLTF data to obtain skeleton skin, rest pose, and
-    // material information — even when there are no animations (static preview).
+    if (data->sourceData != NULL) return true;
     cgltf_options options = { 0 };
     options.file.read = GLBFileReadUtf8;
     options.file.release = GLBFileReleaseUtf8;
     cgltf_result result = cgltf_parse_file(&options, filename, &data->sourceData);
-    if (result != cgltf_result_success) { printf("WARN: Failed to parse GLB source data for '%s'\n", filename); return false; }
+    if (result != cgltf_result_success) { data->sourceData = NULL; printf("WARN: Failed to parse GLB source data for '%s'\n", filename); return false; }
     result = cgltf_load_buffers(&options, data->sourceData, filename);
     if (result != cgltf_result_success) { printf("WARN: Failed to load GLB source buffers for '%s'\n", filename); cgltf_free(data->sourceData); data->sourceData = NULL; return false; }
+    return true;
+}
+
+static void GLBDataCollectNodes(cgltf_node* node, cgltf_node** list, cgltf_size* count)
+{
+    list[(*count)++] = node;
+    for (cgltf_size i = 0; i < node->children_count; i++)
+        GLBDataCollectNodes(node->children[i], list, count);
+}
+
+// Skeleton-only files (no skin, no mesh) are valid glTF but raylib builds the
+// skeleton solely from skins[0]. Synthesize that skin and raylib's bone data from
+// the node hierarchy (all non-mesh nodes of the default scene, parents first).
+// The skin is stored in sourceData->skins so cgltf_free releases it.
+static bool GLBDataSynthesizeSkeleton(GLBData* data, const char* filename)
+{
+    if (!GLBDataParseSource(data, filename)) return false;
+    cgltf_data* src = data->sourceData;
+    if (src->skins_count > 0 || src->nodes_count == 0) return false;
+    cgltf_scene* scene = src->scene != NULL ? src->scene : (src->scenes_count > 0 ? &src->scenes[0] : NULL);
+    if (scene == NULL || scene->nodes_count == 0) return false;
+
+    cgltf_node** list = (cgltf_node**)malloc(src->nodes_count * sizeof(cgltf_node*));
+    if (list == NULL) return false;
+    cgltf_size count = 0;
+    for (cgltf_size i = 0; i < scene->nodes_count; i++)
+        GLBDataCollectNodes(scene->nodes[i], list, &count);
+
+    cgltf_size boneCount = 0;
+    for (cgltf_size i = 0; i < count; i++)
+        if (list[i]->mesh == NULL) list[boneCount++] = list[i];
+    if (boneCount == 0) { free(list); return false; }
+
+    cgltf_skin* skin = (cgltf_skin*)calloc(1, sizeof(cgltf_skin));
+    BoneInfo* bones = (BoneInfo*)calloc(boneCount, sizeof(BoneInfo));
+    Transform* bindPose = (Transform*)calloc(boneCount, sizeof(Transform));
+    if (skin == NULL || bones == NULL || bindPose == NULL)
+    { free(skin); free(bones); free(bindPose); free(list); return false; }
+    skin->joints = list;
+    skin->joints_count = boneCount;
+
+    for (cgltf_size i = 0; i < boneCount; i++)
+    {
+        const cgltf_node* node = list[i];
+        if (node->name != NULL) strncpy(bones[i].name, node->name, sizeof(bones[i].name) - 1);
+        bones[i].parent = -1;
+        for (const cgltf_node* ancestor = node->parent; ancestor != NULL; ancestor = ancestor->parent)
+        {
+            int index = GLBFindSkinJointIndex(skin, ancestor);
+            if (index >= 0) { bones[i].parent = index; break; }
+        }
+        cgltf_float world[16] = { 0 };
+        cgltf_node_transform_world(node, world);
+        MatrixDecompose(GLBMatrixFromCgltf(world), &bindPose[i].translation, &bindPose[i].rotation, &bindPose[i].scale);
+        bindPose[i].rotation = QuaternionNormalize(bindPose[i].rotation);
+    }
+
+    src->skins = skin;
+    src->skins_count = 1;
+    data->model.skeleton.boneCount = (int)boneCount;
+    data->model.skeleton.bones = bones;
+    data->model.skeleton.bindPose = bindPose;
+    printf("INFO: GLB '%s' has no skin; built a %d-bone skeleton from the node hierarchy\n", filename, (int)boneCount);
+    return true;
+}
+
+static bool GLBDataLoadSource(GLBData* data, const char* filename)
+{
+    // Always parse the source GLTF data to obtain skeleton skin, rest pose, and
+    // material information - even when there are no animations (static preview).
+    if (!GLBDataParseSource(data, filename)) return false;
     data->sourceSkin = (data->sourceData->skins_count > 0) ? &data->sourceData->skins[0] : NULL;
     int boneCount = data->model.skeleton.boneCount;
     for (int boneIdx = 0; boneIdx < boneCount; boneIdx++)
@@ -1005,6 +1075,8 @@ bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSi
     if (ext == NULL || (strcmp(ext, ".glb") != 0 && strcmp(ext, ".GLB") != 0 && strcmp(ext, ".gltf") != 0 && strcmp(ext, ".GLTF") != 0))
     { snprintf(errMsg, errMsgSize, "Error: File '%s' is not a .glb/.gltf file", filename); return false; }
     data->model = LoadModel(filename);
+    if (data->model.skeleton.boneCount == 0 && data->model.meshCount == 0)
+        GLBDataSynthesizeSkeleton(data, filename);
     int bc = data->model.skeleton.boneCount;
     // A file with neither bones nor a mesh has nothing to display.
     if (bc == 0 && data->model.meshCount == 0)
