@@ -238,6 +238,7 @@ void GLBDataInit(GLBData* data)
     data->sourceGlobalPose = NULL;
     data->sourceRootPose = NULL;
     data->inverseBindMatrices = NULL;
+    data->meshSkins = NULL;
     data->topoOrder = NULL;
     data->invTopoOrder = NULL;
     data->materialInfo = NULL;
@@ -278,6 +279,18 @@ static void GLBDataUnloadModelTextures(Model* model)
 
 void GLBDataFree(GLBData* data)
 {
+    if (data->meshSkins != NULL)
+    {
+        for (int i = 0; i < data->model.meshCount; i++)
+        {
+            free(data->meshSkins[i].joints);
+            free(data->meshSkins[i].inverseBindMatrices);
+            free(data->meshSkins[i].boneMatrices);
+            free(data->meshSkins[i].normalMatrices);
+        }
+        free(data->meshSkins);
+        data->meshSkins = NULL;
+    }
     if (data->animations != NULL)
     {
         UnloadModelAnimations(data->animations, data->animCount);
@@ -374,11 +387,14 @@ Matrix GLBTransformToMatrix(Transform transform)
         MatrixTranslate(transform.translation.x, transform.translation.y, transform.translation.z));
 }
 
-static void GLBDataUpdateModelAnimationVertexBuffers(Model model)
+static void GLBDataUpdateModelAnimationVertexBuffers(GLBData* glb)
 {
+    Model model = glb->model;
     for (int meshIndex = 0; meshIndex < model.meshCount; meshIndex++)
     {
         Mesh* mesh = &model.meshes[meshIndex];
+        GLBMeshSkin* skin = glb->meshSkins != NULL ? &glb->meshSkins[meshIndex] : NULL;
+        if (skin != NULL && skin->jointCount == 0) skin = NULL;
         if (mesh->boneWeights == NULL || mesh->boneIndices == NULL || mesh->animVertices == NULL) continue;
         bool bufferUpdateRequired = false;
         int boneCounter = 0;
@@ -388,17 +404,21 @@ static void GLBDataUpdateModelAnimationVertexBuffers(Model model)
             mesh->animVertices[vertexIndex + 0] = 0.0f;
             mesh->animVertices[vertexIndex + 1] = 0.0f;
             mesh->animVertices[vertexIndex + 2] = 0.0f;
-            mesh->animNormals[vertexIndex + 0] = 0.0f;
-            mesh->animNormals[vertexIndex + 1] = 0.0f;
-            mesh->animNormals[vertexIndex + 2] = 0.0f;
+            if (mesh->animNormals != NULL)
+            {
+                mesh->animNormals[vertexIndex + 0] = 0.0f;
+                mesh->animNormals[vertexIndex + 1] = 0.0f;
+                mesh->animNormals[vertexIndex + 2] = 0.0f;
+            }
             for (int weightIndex = 0; weightIndex < 4; weightIndex++, boneCounter++)
             {
                 float boneWeight = mesh->boneWeights[boneCounter];
                 int boneIndex = mesh->boneIndices[boneCounter];
                 if (boneWeight == 0.0f) continue;
-                if (boneIndex < 0 || boneIndex >= model.skeleton.boneCount) continue;
+                if (boneIndex < 0 || boneIndex >= (skin != NULL ? skin->jointCount : model.skeleton.boneCount)) continue;
+                Matrix boneMatrix = skin != NULL ? skin->boneMatrices[boneIndex] : model.boneMatrices[boneIndex];
                 Vector3 animVertex = { mesh->vertices[vertexIndex], mesh->vertices[vertexIndex + 1], mesh->vertices[vertexIndex + 2] };
-                animVertex = Vector3Transform(animVertex, model.boneMatrices[boneIndex]);
+                animVertex = Vector3Transform(animVertex, boneMatrix);
                 mesh->animVertices[vertexIndex + 0] += animVertex.x * boneWeight;
                 mesh->animVertices[vertexIndex + 1] += animVertex.y * boneWeight;
                 mesh->animVertices[vertexIndex + 2] += animVertex.z * boneWeight;
@@ -406,7 +426,7 @@ static void GLBDataUpdateModelAnimationVertexBuffers(Model model)
                 if (mesh->normals != NULL && mesh->animNormals != NULL)
                 {
                     Vector3 animNormal = { mesh->normals[vertexIndex], mesh->normals[vertexIndex + 1], mesh->normals[vertexIndex + 2] };
-                    animNormal = Vector3Transform(animNormal, MatrixTranspose(MatrixInvert(model.boneMatrices[boneIndex])));
+                    animNormal = Vector3Transform(animNormal, skin != NULL ? skin->normalMatrices[boneIndex] : MatrixTranspose(MatrixInvert(boneMatrix)));
                     mesh->animNormals[vertexIndex + 0] += animNormal.x * boneWeight;
                     mesh->animNormals[vertexIndex + 1] += animNormal.y * boneWeight;
                     mesh->animNormals[vertexIndex + 2] += animNormal.z * boneWeight;
@@ -432,7 +452,20 @@ void GLBDataUpdateModelPose(GLBData* glb, const Transform* globalPose)
         Matrix currentPoseMatrix = GLBTransformToMatrix(glb->model.currentPose[boneIndex]);
         glb->model.boneMatrices[boneIndex] = MatrixMultiply(glb->inverseBindMatrices[boneIndex], currentPoseMatrix);
     }
-    GLBDataUpdateModelAnimationVertexBuffers(glb->model);
+    if (glb->meshSkins != NULL)
+    {
+        for (int m = 0; m < glb->model.meshCount; m++)
+        {
+            GLBMeshSkin* skin = &glb->meshSkins[m];
+            for (int j = 0; j < skin->jointCount; j++)
+            {
+                skin->boneMatrices[j] = MatrixMultiply(skin->inverseBindMatrices[j],
+                    GLBTransformToMatrix(globalPose[skin->joints[j]]));
+                skin->normalMatrices[j] = MatrixTranspose(MatrixInvert(skin->boneMatrices[j]));
+            }
+        }
+    }
+    GLBDataUpdateModelAnimationVertexBuffers(glb);
 }
 
 static float GLBMatrixMaxAbsDiff(Matrix a, Matrix b)
@@ -534,6 +567,65 @@ static bool GLBDataLoadInverseBindMatrices(GLBData* data)
     free(data->inverseBindMatrices);
     data->inverseBindMatrices = inverseBindMatrices;
     return true;
+}
+
+// JOINTS_0 indexes the skin on the mesh node, not skins[0]. Even skins
+// sharing exactly the same joint nodes can order them differently and supply
+// different bind matrices. Keep the original mesh indices and a local palette.
+static bool GLBDataLoadMeshSkins(GLBData* data, char* errMsg, int errMsgSize)
+{
+    if (data->sourceData == NULL || data->sourceSkin == NULL || data->model.meshCount == 0) return true;
+    data->meshSkins = (GLBMeshSkin*)calloc((size_t)data->model.meshCount, sizeof(GLBMeshSkin));
+    if (data->meshSkins == NULL) goto outOfMemory;
+    int meshIndex = 0;
+    for (cgltf_size n = 0; n < data->sourceData->nodes_count; n++)
+    {
+        const cgltf_node* node = &data->sourceData->nodes[n];
+        if (node->mesh == NULL) continue;
+        for (cgltf_size p = 0; p < node->mesh->primitives_count; p++)
+        {
+            if (node->mesh->primitives[p].type != cgltf_primitive_type_triangles) continue;
+            if (meshIndex >= data->model.meshCount) goto invalidSkin;
+            GLBMeshSkin* target = &data->meshSkins[meshIndex++];
+            const cgltf_skin* source = node->skin;
+            if (source == NULL) continue; // rigid attachments use the model palette
+            if (source->joints_count > INT_MAX) goto invalidSkin;
+            target->jointCount = (int)source->joints_count;
+            target->joints = (int*)malloc(source->joints_count * sizeof(int));
+            target->inverseBindMatrices = (Matrix*)malloc(source->joints_count * sizeof(Matrix));
+            target->boneMatrices = (Matrix*)malloc(source->joints_count * sizeof(Matrix));
+            target->normalMatrices = (Matrix*)malloc(source->joints_count * sizeof(Matrix));
+            if (target->joints == NULL || target->inverseBindMatrices == NULL ||
+                target->boneMatrices == NULL || target->normalMatrices == NULL) goto outOfMemory;
+            for (int j = 0; j < target->jointCount; j++)
+            {
+                target->joints[j] = GLBFindSkinJointIndex(data->sourceSkin, source->joints[j]);
+                if (target->joints[j] < 0 || target->joints[j] >= data->model.skeleton.boneCount)
+                {
+                    snprintf(errMsg, errMsgSize, "Error: Mesh skin joint '%s' is absent from the model skeleton",
+                        source->joints[j]->name != NULL ? source->joints[j]->name : "(unnamed)");
+                    return false;
+                }
+                // glTF specifies identity matrices when the accessor is absent.
+                target->inverseBindMatrices[j] = MatrixIdentity();
+                if (source->inverse_bind_matrices != NULL)
+                {
+                    cgltf_float matrix[16];
+                    if (!cgltf_accessor_read_float(source->inverse_bind_matrices, (cgltf_size)j, matrix, 16)) goto invalidSkin;
+                    target->inverseBindMatrices[j] = GLBMatrixFromCgltf(matrix);
+                }
+            }
+        }
+    }
+    if (meshIndex != data->model.meshCount) goto invalidSkin;
+    return true;
+
+outOfMemory:
+    snprintf(errMsg, errMsgSize, "Error: Out of memory while loading mesh skins");
+    return false;
+invalidSkin:
+    snprintf(errMsg, errMsgSize, "Error: Invalid GLB mesh skin or mesh/node mapping");
+    return false;
 }
 
 static void GLBDataUndoSkinnedMeshNodeTransforms(GLBData* data)
@@ -1228,6 +1320,12 @@ bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSi
     {
         GLBDataFree(data);
         snprintf(errMsg, errMsgSize, "Error: Failed to bind rigid attachments in '%s'", filename);
+        printf("ERROR: %s\n", errMsg);
+        return false;
+    }
+    if (!GLBDataLoadMeshSkins(data, errMsg, errMsgSize))
+    {
+        GLBDataFree(data);
         printf("ERROR: %s\n", errMsg);
         return false;
     }

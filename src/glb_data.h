@@ -36,6 +36,15 @@ typedef struct GLBMaterialInfo
 } GLBMaterialInfo;
 
 // Structure for storing GLB model and animation data
+typedef struct GLBMeshSkin
+{
+    int jointCount;
+    int* joints;                   // mesh skin joint index -> model skeleton index
+    Matrix* inverseBindMatrices;
+    Matrix* boneMatrices;
+    Matrix* normalMatrices;
+} GLBMeshSkin;
+
 typedef struct GLBData
 {
     Model model;
@@ -54,6 +63,7 @@ typedef struct GLBData
     Transform* sourceGlobalPose;
     Transform* sourceRootPose;
     Matrix* inverseBindMatrices;    // per-bone skinning inverse bind matrices (glTF IBMs)
+    GLBMeshSkin* meshSkins;         // each mesh uses its node's skin and joint ordering
     int* topoOrder;
     int* invTopoOrder;
     GLBMaterialInfo* materialInfo;
