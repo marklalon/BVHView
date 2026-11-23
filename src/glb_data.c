@@ -33,6 +33,15 @@
 #include "transform_data.h"
 #include "math_utils.h"
 
+struct GLBSourceNodePose
+{
+    Transform local;
+    Matrix world;
+    bool affectsSkeleton;
+    bool animated;
+    bool evaluated;
+};
+
 static bool GLBDataIsWebP(const cgltf_image* image, const unsigned char* bytes, int size)
 {
     if (image != NULL && image->mime_type != NULL && strcmp(image->mime_type, "image/webp") == 0) return true;
@@ -233,6 +242,7 @@ void GLBDataInit(GLBData* data)
     data->sourceStartTimes = NULL;
     data->sourceData = NULL;
     data->sourceSkin = NULL;
+    data->sourceNodePoses = NULL;
     data->sourceRestPose = NULL;
     data->sourceLocalPose = NULL;
     data->sourceGlobalPose = NULL;
@@ -310,6 +320,12 @@ void GLBDataFree(GLBData* data)
     free(data->sourceGlobalPose);
     free(data->sourceRootPose);
     free(data->inverseBindMatrices);
+    if (data->sourceNodePoses != NULL)
+    {
+        free(data->sourceSkin->joints);
+        free(data->sourceSkin);
+        free(data->sourceNodePoses);
+    }
     if (data->sourceData != NULL) cgltf_free(data->sourceData);
     free(data->topoOrder);
     free(data->invTopoOrder);
@@ -324,6 +340,7 @@ void GLBDataFree(GLBData* data)
     data->sourceStartTimes = NULL;
     data->sourceData = NULL;
     data->sourceSkin = NULL;
+    data->sourceNodePoses = NULL;
     data->sourceRestPose = NULL;
     data->sourceLocalPose = NULL;
     data->sourceGlobalPose = NULL;
@@ -442,14 +459,21 @@ static void GLBDataUpdateModelAnimationVertexBuffers(GLBData* glb)
     }
 }
 
-void GLBDataUpdateModelPose(GLBData* glb, const Transform* globalPose)
+static Matrix GLBDataGetJointWorld(const GLBData* data, const Transform* globalPose, int joint,
+    const GLBSourceNodePose* nodePoses)
+{
+    if (nodePoses == NULL) return GLBTransformToMatrix(globalPose[joint]);
+    return nodePoses[data->sourceSkin->joints[joint] - data->sourceData->nodes].world;
+}
+
+static void GLBDataApplyModelPose(GLBData* glb, const Transform* globalPose, const GLBSourceNodePose* nodePoses)
 {
     if (glb->model.currentPose == NULL || glb->model.boneMatrices == NULL || glb->inverseBindMatrices == NULL) return;
     int boneCount = glb->model.skeleton.boneCount;
     for (int boneIndex = 0; boneIndex < boneCount; boneIndex++)
     {
         glb->model.currentPose[boneIndex] = globalPose[boneIndex];
-        Matrix currentPoseMatrix = GLBTransformToMatrix(glb->model.currentPose[boneIndex]);
+        Matrix currentPoseMatrix = GLBDataGetJointWorld(glb, globalPose, boneIndex, nodePoses);
         glb->model.boneMatrices[boneIndex] = MatrixMultiply(glb->inverseBindMatrices[boneIndex], currentPoseMatrix);
     }
     if (glb->meshSkins != NULL)
@@ -460,12 +484,74 @@ void GLBDataUpdateModelPose(GLBData* glb, const Transform* globalPose)
             for (int j = 0; j < skin->jointCount; j++)
             {
                 skin->boneMatrices[j] = MatrixMultiply(skin->inverseBindMatrices[j],
-                    GLBTransformToMatrix(globalPose[skin->joints[j]]));
+                    GLBDataGetJointWorld(glb, globalPose, skin->joints[j], nodePoses));
                 skin->normalMatrices[j] = MatrixTranspose(MatrixInvert(skin->boneMatrices[j]));
             }
         }
     }
     GLBDataUpdateModelAnimationVertexBuffers(glb);
+}
+
+void GLBDataUpdateModelPose(GLBData* glb, const Transform* globalPose)
+{
+    GLBDataApplyModelPose(glb, globalPose, NULL);
+}
+
+static Matrix GLBDataEvaluateNodeWorld(GLBData* data, const cgltf_node* node)
+{
+    GLBSourceNodePose* pose = &data->sourceNodePoses[node - data->sourceData->nodes];
+    if (pose->evaluated) return pose->world;
+
+    if (pose->animated) pose->world = GLBTransformToMatrix(pose->local);
+    else
+    {
+        cgltf_float local[16];
+        cgltf_node_transform_local(node, local);
+        pose->world = GLBMatrixFromCgltf(local);
+    }
+    if (node->parent != NULL)
+        pose->world = MatrixMultiply(pose->world, GLBDataEvaluateNodeWorld(data, node->parent));
+    pose->evaluated = true;
+    return pose->world;
+}
+
+bool GLBDataSampleCombinedPose(GLBData* data, const cgltf_animation* anim, float time)
+{
+    for (cgltf_size i = 0; i < data->sourceData->nodes_count; i++)
+    {
+        data->sourceNodePoses[i].animated = false;
+        data->sourceNodePoses[i].evaluated = false;
+    }
+    for (cgltf_size i = 0; anim != NULL && i < anim->channels_count; i++)
+    {
+        const cgltf_animation_channel* channel = &anim->channels[i];
+        if (channel->target_node == NULL || channel->target_path == cgltf_animation_path_type_weights) continue;
+        GLBSourceNodePose* pose = &data->sourceNodePoses[channel->target_node - data->sourceData->nodes];
+        if (!pose->affectsSkeleton) continue;
+        if (channel->sampler == NULL) return false;
+        if (!pose->animated) pose->local = GLBNodeLocalTransform(channel->target_node);
+        void* value;
+        switch (channel->target_path)
+        {
+            case cgltf_animation_path_type_translation: value = &pose->local.translation; break;
+            case cgltf_animation_path_type_rotation: value = &pose->local.rotation; break;
+            case cgltf_animation_path_type_scale: value = &pose->local.scale; break;
+            default: continue;
+        }
+        const cgltf_animation_sampler* sampler = channel->sampler;
+        if (!GLBGetPoseAtTime(sampler->interpolation, sampler->input, sampler->output, time, value)) return false;
+        pose->animated = true;
+    }
+
+    for (int i = 0; i < data->model.skeleton.boneCount; i++)
+    {
+        Matrix world = GLBDataEvaluateNodeWorld(data, data->sourceSkin->joints[i]);
+        Transform* global = &data->sourceGlobalPose[i];
+        MatrixDecompose(world, &global->translation, &global->rotation, &global->scale);
+        global->rotation = QuaternionNormalize(global->rotation);
+    }
+    GLBDataApplyModelPose(data, data->sourceGlobalPose, data->sourceNodePoses);
+    return true;
 }
 
 static float GLBMatrixMaxAbsDiff(Matrix a, Matrix b)
@@ -546,27 +632,50 @@ static bool GLBDataLoadInverseBindMatrices(GLBData* data)
     data->inverseBindMatrices = (Matrix*)malloc((size_t)boneCount * sizeof(Matrix));
     if (data->inverseBindMatrices == NULL) return false;
     for (int boneIndex = 0; boneIndex < boneCount; boneIndex++)
-        data->inverseBindMatrices[boneIndex] = MatrixInvert(GLBTransformToMatrix(data->model.skeleton.bindPose[boneIndex]));
+    {
+        Matrix bind = GLBTransformToMatrix(data->model.skeleton.bindPose[boneIndex]);
+        if (data->sourceNodePoses != NULL &&
+            (cgltf_size)boneIndex >= data->sourceData->skins[0].joints_count)
+        {
+            cgltf_float world[16];
+            cgltf_node_transform_world(data->sourceSkin->joints[boneIndex], world);
+            bind = GLBMatrixFromCgltf(world);
+        }
+        data->inverseBindMatrices[boneIndex] = MatrixInvert(bind);
+    }
 
-    const cgltf_skin* skin = data->sourceSkin;
+    // The original skin's ordering is preserved at the start of the combined skeleton.
+    const cgltf_skin* skin = data->sourceData != NULL && data->sourceData->skins_count > 0
+        ? &data->sourceData->skins[0] : NULL;
     if (skin == NULL || skin->inverse_bind_matrices == NULL) return true;
-    if ((int)skin->joints_count != boneCount || skin->inverse_bind_matrices->count < skin->joints_count) return true;
-    Matrix* inverseBindMatrices = (Matrix*)malloc((size_t)boneCount * sizeof(Matrix));
+    if (skin->joints_count > (cgltf_size)boneCount || skin->inverse_bind_matrices->count < skin->joints_count) return true;
+    Matrix* inverseBindMatrices = (Matrix*)malloc(skin->joints_count * sizeof(Matrix));
     if (inverseBindMatrices == NULL) return false;
-    for (int boneIndex = 0; boneIndex < boneCount; boneIndex++)
+    for (cgltf_size boneIndex = 0; boneIndex < skin->joints_count; boneIndex++)
     {
         cgltf_float inverseBind[16] = { 0 };
         if (!cgltf_accessor_read_float(skin->inverse_bind_matrices, (cgltf_size)boneIndex, inverseBind, 16))
         {
-            printf("WARN: Failed to read GLB inverse bind matrix %d; using joint world bind pose\n", boneIndex);
+            printf("WARN: Failed to read GLB inverse bind matrix %zu; using joint world bind pose\n", (size_t)boneIndex);
             free(inverseBindMatrices);
             return true;
         }
         inverseBindMatrices[boneIndex] = GLBMatrixFromCgltf(inverseBind);
     }
-    free(data->inverseBindMatrices);
-    data->inverseBindMatrices = inverseBindMatrices;
+    memcpy(data->inverseBindMatrices, inverseBindMatrices, skin->joints_count * sizeof(Matrix));
+    free(inverseBindMatrices);
     return true;
+}
+
+static bool GLBMeshSkinAllocate(GLBMeshSkin* skin, int jointCount)
+{
+    skin->jointCount = jointCount;
+    skin->joints = (int*)malloc((size_t)jointCount * sizeof(int));
+    skin->inverseBindMatrices = (Matrix*)malloc((size_t)jointCount * sizeof(Matrix));
+    skin->boneMatrices = (Matrix*)malloc((size_t)jointCount * sizeof(Matrix));
+    skin->normalMatrices = (Matrix*)malloc((size_t)jointCount * sizeof(Matrix));
+    return skin->joints != NULL && skin->inverseBindMatrices != NULL &&
+        skin->boneMatrices != NULL && skin->normalMatrices != NULL;
 }
 
 // JOINTS_0 indexes the skin on the mesh node, not skins[0]. Even skins
@@ -588,15 +697,9 @@ static bool GLBDataLoadMeshSkins(GLBData* data, char* errMsg, int errMsgSize)
             if (meshIndex >= data->model.meshCount) goto invalidSkin;
             GLBMeshSkin* target = &data->meshSkins[meshIndex++];
             const cgltf_skin* source = node->skin;
-            if (source == NULL) continue; // rigid attachments use the model palette
+            if (source == NULL) continue;
             if (source->joints_count > INT_MAX) goto invalidSkin;
-            target->jointCount = (int)source->joints_count;
-            target->joints = (int*)malloc(source->joints_count * sizeof(int));
-            target->inverseBindMatrices = (Matrix*)malloc(source->joints_count * sizeof(Matrix));
-            target->boneMatrices = (Matrix*)malloc(source->joints_count * sizeof(Matrix));
-            target->normalMatrices = (Matrix*)malloc(source->joints_count * sizeof(Matrix));
-            if (target->joints == NULL || target->inverseBindMatrices == NULL ||
-                target->boneMatrices == NULL || target->normalMatrices == NULL) goto outOfMemory;
+            if (!GLBMeshSkinAllocate(target, (int)source->joints_count)) goto outOfMemory;
             for (int j = 0; j < target->jointCount; j++)
             {
                 target->joints[j] = GLBFindSkinJointIndex(data->sourceSkin, source->joints[j]);
@@ -689,7 +792,7 @@ static int GLBFindNearestAncestorJointIndex(const cgltf_skin* skin, const cgltf_
 // meshes on joint nodes and meshes below intermediate attachment nodes.
 static bool GLBDataBindRigidAttachments(GLBData* data)
 {
-    if (data->sourceData == NULL || data->sourceSkin == NULL || data->model.meshes == NULL || data->inverseBindMatrices == NULL) return true;
+    if (data->meshSkins == NULL || data->inverseBindMatrices == NULL) return true;
 
     int meshIndex = 0;
     int attachmentCount = 0;
@@ -711,13 +814,12 @@ static bool GLBDataBindRigidAttachments(GLBData* data)
                 return true;
             }
 
-            Mesh* mesh = &data->model.meshes[meshIndex++];
+            Mesh* mesh = &data->model.meshes[meshIndex];
+            GLBMeshSkin* skin = &data->meshSkins[meshIndex++];
             if (jointIndex < 0 || GLBPrimitiveHasSkinAttributes(primitive)) continue;
-            if (jointIndex > UCHAR_MAX)
-            {
-                printf("WARN: Rigid GLB attachment joint index %d exceeds the supported limit\n", jointIndex);
-                continue;
-            }
+            if (!GLBMeshSkinAllocate(skin, 1)) return false;
+            skin->joints[0] = jointIndex;
+            skin->inverseBindMatrices[0] = data->inverseBindMatrices[jointIndex];
 
             if (mesh->boneIndices == NULL)
                 mesh->boneIndices = (unsigned char*)calloc((size_t)mesh->vertexCount * 4, sizeof(unsigned char));
@@ -745,11 +847,8 @@ static bool GLBDataBindRigidAttachments(GLBData* data)
             memset(mesh->boneIndices, 0, (size_t)mesh->vertexCount * 4 * sizeof(unsigned char));
             memset(mesh->boneWeights, 0, (size_t)mesh->vertexCount * 4 * sizeof(float));
             for (int vertexIndex = 0; vertexIndex < mesh->vertexCount; vertexIndex++)
-            {
-                mesh->boneIndices[vertexIndex * 4] = (unsigned char)jointIndex;
                 mesh->boneWeights[vertexIndex * 4] = 1.0f;
-            }
-            mesh->boneCount = data->model.skeleton.boneCount;
+            mesh->boneCount = skin->jointCount;
             // raylib baked the vertices with the joint's node world transform; move them
             // into that joint's bind space in case the bind pose came from its IBM instead.
             cgltf_float jointWorldTransform[16] = { 0 };
@@ -883,12 +982,14 @@ bool GLBGetPoseAtTime(cgltf_interpolation_type interpolationType, cgltf_accessor
     return true;
 }
 
-static bool GLBAnimationTargetsSkinJoint(const cgltf_skin* skin, const cgltf_node* node)
+static bool GLBAnimationAffectsSkeleton(const GLBData* data, const cgltf_animation_channel* channel)
 {
-    if (skin == NULL || node == NULL) return false;
-    for (cgltf_size i = 0; i < skin->joints_count; i++)
-        if (skin->joints[i] == node) return true;
-    return false;
+    const cgltf_node* node = channel->target_node;
+    if (node == NULL) return false;
+    if (data->sourceNodePoses != NULL)
+        return channel->target_path != cgltf_animation_path_type_weights &&
+            data->sourceNodePoses[node - data->sourceData->nodes].affectsSkeleton;
+    return GLBFindSkinJointIndex(data->sourceSkin, node) >= 0;
 }
 
 static bool GLBDataParseSource(GLBData* data, const char* filename)
@@ -967,12 +1068,98 @@ static bool GLBDataSynthesizeSkeleton(GLBData* data, const char* filename)
     return true;
 }
 
-static bool GLBDataLoadSource(GLBData* data, const char* filename)
+// raylib builds its skeleton from the first skin. Keep those indices and append
+// joints from the remaining skins so each mesh can reference the same pose.
+static bool GLBDataCombineSkins(GLBData* data)
 {
-    // Always parse the source GLTF data to obtain skeleton skin, rest pose, and
-    // material information - even when there are no animations (static preview).
-    if (!GLBDataParseSource(data, filename)) return false;
-    data->sourceSkin = (data->sourceData->skins_count > 0) ? &data->sourceData->skins[0] : NULL;
+    cgltf_data* src = data->sourceData;
+    if (src->skins_count == 0) return true;
+    data->sourceSkin = &src->skins[0];
+    if (src->skins_count == 1) return true;
+    if (src->nodes_count > INT_MAX) return false;
+
+    cgltf_node** joints = (cgltf_node**)malloc(src->nodes_count * sizeof(*joints));
+    GLBSourceNodePose* poses = (GLBSourceNodePose*)calloc(src->nodes_count, sizeof(*poses));
+    if (joints == NULL || poses == NULL)
+    {
+        free(joints);
+        free(poses);
+        return false;
+    }
+
+    cgltf_size count = 0;
+    for (cgltf_size s = 0; s < src->skins_count; s++)
+    {
+        const cgltf_skin* skin = &src->skins[s];
+        for (cgltf_size j = 0; j < skin->joints_count; j++)
+        {
+            cgltf_node* node = skin->joints[j];
+            GLBSourceNodePose* pose = &poses[node - src->nodes];
+            if (pose->affectsSkeleton) continue;
+            joints[count++] = node;
+            pose->affectsSkeleton = true;
+        }
+    }
+    const ModelSkeleton oldSkeleton = data->model.skeleton;
+    if (count == (cgltf_size)oldSkeleton.boneCount)
+    {
+        free(joints);
+        free(poses);
+        return true;
+    }
+
+    cgltf_skin* combined = (cgltf_skin*)calloc(1, sizeof(*combined));
+    BoneInfo* bones = (BoneInfo*)calloc(count, sizeof(*bones));
+    Transform* bindPose = (Transform*)calloc(count, sizeof(*bindPose));
+    Transform* currentPose = (Transform*)calloc(count, sizeof(*currentPose));
+    Matrix* boneMatrices = (Matrix*)calloc(count, sizeof(*boneMatrices));
+    if (combined == NULL || bones == NULL || bindPose == NULL || currentPose == NULL || boneMatrices == NULL)
+    {
+        free(joints);
+        free(poses);
+        free(combined);
+        free(bones);
+        free(bindPose);
+        free(currentPose);
+        free(boneMatrices);
+        return false;
+    }
+    combined->joints = joints;
+    combined->joints_count = count;
+    for (cgltf_size i = 0; i < count; i++)
+    {
+        const cgltf_node* node = joints[i];
+        if (node->name != NULL) strncpy(bones[i].name, node->name, sizeof(bones[i].name) - 1);
+        bones[i].parent = GLBFindNearestAncestorJointIndex(combined, node->parent);
+        for (const cgltf_node* parent = node->parent; parent != NULL; parent = parent->parent)
+            poses[parent - src->nodes].affectsSkeleton = true;
+        if (i < (cgltf_size)oldSkeleton.boneCount) bindPose[i] = oldSkeleton.bindPose[i];
+        else
+        {
+            cgltf_float world[16];
+            cgltf_node_transform_world(node, world);
+            MatrixDecompose(GLBMatrixFromCgltf(world), &bindPose[i].translation, &bindPose[i].rotation, &bindPose[i].scale);
+        }
+        currentPose[i] = bindPose[i];
+        boneMatrices[i] = MatrixIdentity();
+    }
+    MemFree(oldSkeleton.bones);
+    MemFree(oldSkeleton.bindPose);
+    MemFree(data->model.currentPose);
+    MemFree(data->model.boneMatrices);
+    data->model.skeleton.boneCount = (int)count;
+    data->model.skeleton.bones = bones;
+    data->model.skeleton.bindPose = bindPose;
+    data->model.currentPose = currentPose;
+    data->model.boneMatrices = boneMatrices;
+    data->sourceSkin = combined;
+    data->sourceNodePoses = poses;
+    printf("INFO: Combined %zu GLB skins into a %zu-joint skeleton\n", (size_t)src->skins_count, (size_t)count);
+    return true;
+}
+
+static void GLBDataInitSourcePoses(GLBData* data)
+{
     int boneCount = data->model.skeleton.boneCount;
     for (int boneIdx = 0; boneIdx < boneCount; boneIdx++)
     {
@@ -981,8 +1168,6 @@ static bool GLBDataLoadSource(GLBData* data, const char* filename)
             data->sourceRestPose[boneIdx] = GLBNodeLocalTransform(data->sourceSkin->joints[boneIdx]);
     }
     GLBDataResetSourceRootPose(data);
-
-    return true;
 }
 
 void GLBDataResetSourceRootPose(GLBData* data)
@@ -1008,12 +1193,12 @@ void GLBDataResetSourceRootPose(GLBData* data)
 }
 
 static bool GLBAnimationInputWasScanned(const cgltf_animation* anim, cgltf_size channelIndex,
-    const cgltf_accessor* input, const cgltf_skin* skin)
+    const cgltf_accessor* input, const GLBData* data)
 {
     for (cgltf_size previousIndex = 0; previousIndex < channelIndex; previousIndex++)
     {
         const cgltf_animation_channel* previous = &anim->channels[previousIndex];
-        if (skin != NULL && !GLBAnimationTargetsSkinJoint(skin, previous->target_node)) continue;
+        if (!GLBAnimationAffectsSkeleton(data, previous)) continue;
         if (previous->sampler != NULL && previous->sampler->input == input) return true;
     }
     return false;
@@ -1039,7 +1224,6 @@ static bool GLBDataInitSourceAnimations(GLBData* data)
         data->sourceFrameTimes == NULL || data->sourceDurations == NULL ||
         data->sourceStartTimes == NULL) return false;
 
-    const cgltf_skin* skin = data->sourceSkin;
     for (int a = 0; a < data->animCount; a++)
     {
         cgltf_animation* anim = &data->sourceData->animations[a];
@@ -1058,9 +1242,9 @@ static bool GLBDataInitSourceAnimations(GLBData* data)
         {
             cgltf_animation_channel* channel = &anim->channels[channelIdx];
             cgltf_animation_sampler* sampler = channel->sampler;
-            if (!GLBAnimationTargetsSkinJoint(skin, channel->target_node)) continue;
+            if (!GLBAnimationAffectsSkeleton(data, channel)) continue;
             if (sampler == NULL || sampler->input == NULL || sampler->input->count == 0) continue;
-            if (GLBAnimationInputWasScanned(anim, channelIdx, sampler->input, skin)) continue;
+            if (GLBAnimationInputWasScanned(anim, channelIdx, sampler->input, data)) continue;
 
             cgltf_size inputCount = sampler->input->count;
             if (inputCount > (cgltf_size)maxInputCount)
@@ -1173,17 +1357,29 @@ bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSi
     // A file with neither bones nor a mesh has nothing to display.
     if (bc == 0 && data->model.meshCount == 0)
     { snprintf(errMsg, errMsgSize, "Error: Model '%s' has no skeleton and no mesh", filename); printf("ERROR: %s\n", errMsg); return false; }
+    bool sourceLoaded = GLBDataParseSource(data, filename);
+    if (sourceLoaded && !GLBDataCombineSkins(data))
+    {
+        GLBDataFree(data);
+        snprintf(errMsg, errMsgSize, "Error: Failed to combine mesh skins in '%s'", filename);
+        printf("ERROR: %s\n", errMsg);
+        return false;
+    }
+    bc = data->model.skeleton.boneCount;
     data->activeAnim = 0;
     data->frameTime = 1.0f / 60.0f;
 
     if (bc > 0)
     {
-        data->sourceRestPose = (Transform*)malloc((size_t)bc * sizeof(Transform));
-        data->sourceLocalPose = (Transform*)malloc((size_t)bc * sizeof(Transform));
         data->sourceGlobalPose = (Transform*)malloc((size_t)bc * sizeof(Transform));
-        data->sourceRootPose = (Transform*)malloc((size_t)bc * sizeof(Transform));
-        if (data->sourceRestPose == NULL || data->sourceLocalPose == NULL ||
-            data->sourceGlobalPose == NULL || data->sourceRootPose == NULL)
+        if (data->sourceNodePoses == NULL)
+        {
+            data->sourceRestPose = (Transform*)malloc((size_t)bc * sizeof(Transform));
+            data->sourceLocalPose = (Transform*)malloc((size_t)bc * sizeof(Transform));
+            data->sourceRootPose = (Transform*)malloc((size_t)bc * sizeof(Transform));
+        }
+        if (data->sourceGlobalPose == NULL || (data->sourceNodePoses == NULL &&
+            (data->sourceRestPose == NULL || data->sourceLocalPose == NULL || data->sourceRootPose == NULL)))
         {
             GLBDataFree(data);
             snprintf(errMsg, errMsgSize, "Error: Out of memory while loading animation data for '%s'", filename);
@@ -1192,9 +1388,9 @@ bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSi
         }
     }
 
-    bool sourceLoaded = GLBDataLoadSource(data, filename);
     if (bc > 0)
     {
+        if (sourceLoaded && data->sourceNodePoses == NULL) GLBDataInitSourcePoses(data);
         bool animationDataReady = false;
         if (sourceLoaded && data->sourceSkin != NULL)
             animationDataReady = GLBDataInitSourceAnimations(data);
@@ -1316,16 +1512,16 @@ bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSi
         printf("ERROR: %s\n", errMsg);
         return false;
     }
+    if (!GLBDataLoadMeshSkins(data, errMsg, errMsgSize))
+    {
+        GLBDataFree(data);
+        printf("ERROR: %s\n", errMsg);
+        return false;
+    }
     if (!GLBDataBindRigidAttachments(data))
     {
         GLBDataFree(data);
         snprintf(errMsg, errMsgSize, "Error: Failed to bind rigid attachments in '%s'", filename);
-        printf("ERROR: %s\n", errMsg);
-        return false;
-    }
-    if (!GLBDataLoadMeshSkins(data, errMsg, errMsgSize))
-    {
-        GLBDataFree(data);
         printf("ERROR: %s\n", errMsg);
         return false;
     }

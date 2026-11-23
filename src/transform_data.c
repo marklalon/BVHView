@@ -224,6 +224,12 @@ static void TransformDataGlobalPoseToLocal(TransformData* data, int boneCount, c
 
 static bool TransformDataSampleRestPoseGLBExact(TransformData* data, GLBData* glb, float scale)
 {
+    if (glb->sourceNodePoses != NULL)
+    {
+        if (glb->topoOrder == NULL || !GLBDataSampleCombinedPose(glb, NULL, 0.0f)) return false;
+        TransformDataGlobalPoseToLocal(data, glb->model.skeleton.boneCount, glb->topoOrder, glb->sourceGlobalPose, scale);
+        return true;
+    }
     if (glb->sourceRestPose == NULL || glb->sourceGlobalPose == NULL || glb->sourceLocalPose == NULL || glb->topoOrder == NULL) return false;
     int boneCount = glb->model.skeleton.boneCount;
     if (glb->sourceRootPose == NULL) return false;
@@ -254,7 +260,6 @@ static bool TransformDataSampleFrameGLBExact(TransformData* data, GLBData* glb, 
     }
 
     if (glb->sourceData == NULL || glb->sourceSkin == NULL) return false;
-    if (glb->sourceRestPose == NULL || glb->sourceLocalPose == NULL || glb->sourceGlobalPose == NULL || glb->sourceRootPose == NULL) return false;
     if (glb->topoOrder == NULL) return false;
     int animIdx = glb->activeAnim;
     if (animIdx < 0 || animIdx >= (int)glb->sourceData->animations_count) return false;
@@ -262,6 +267,13 @@ static bool TransformDataSampleFrameGLBExact(TransformData* data, GLBData* glb, 
     float duration = GLBDataGetSourceDuration(glb, animIdx);
     float timeClamped = Clamp(time, 0.0f, duration > 0.0f ? duration : time) + GLBDataGetSourceStartTime(glb, animIdx);
     int boneCount = glb->model.skeleton.boneCount;
+    if (glb->sourceNodePoses != NULL)
+    {
+        if (!GLBDataSampleCombinedPose(glb, anim, timeClamped)) return TransformDataSampleRestPoseGLBExact(data, glb, scale);
+        TransformDataGlobalPoseToLocal(data, boneCount, glb->topoOrder, glb->sourceGlobalPose, scale);
+        return true;
+    }
+    if (glb->sourceRestPose == NULL || glb->sourceLocalPose == NULL || glb->sourceGlobalPose == NULL || glb->sourceRootPose == NULL) return false;
     for (int boneIdx = 0; boneIdx < boneCount; boneIdx++)
         glb->sourceLocalPose[boneIdx] = glb->sourceRestPose[boneIdx];
     GLBDataResetSourceRootPose(glb);

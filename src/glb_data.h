@@ -13,6 +13,7 @@
 
 // Forward declaration
 typedef struct TransformData TransformData;
+typedef struct GLBSourceNodePose GLBSourceNodePose;
 
 // Per-material transparency info parsed from GLTF material
 // alphaMode: 0 = OPAQUE, 1 = MASK (alpha cutoff), 2 = BLEND (screen-door)
@@ -58,6 +59,7 @@ typedef struct GLBData
     float* sourceStartTimes;    // per-animation time of the first key; playback time 0 maps here
     cgltf_data* sourceData;
     cgltf_skin* sourceSkin;
+    GLBSourceNodePose* sourceNodePoses; // full node hierarchy for a combined skeleton
     Transform* sourceRestPose;
     Transform* sourceLocalPose;
     Transform* sourceGlobalPose;
@@ -80,6 +82,7 @@ float GLBDataGetSourceStartTime(const GLBData* data, int animIdx);
 bool GLBDataLoad(GLBData* data, const char* filename, char* errMsg, int errMsgSize);
 Matrix GLBDataGetModelTransform(const GLBData* glb, float scale, bool inplace);
 void GLBDataUpdateModelPose(GLBData* glb, const Transform* globalPose);
+bool GLBDataSampleCombinedPose(GLBData* data, const cgltf_animation* anim, float time);
 void GLBDataResetSourceRootPose(GLBData* data);
 
 // Topological ordering
